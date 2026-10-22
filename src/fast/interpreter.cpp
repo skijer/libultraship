@@ -117,7 +117,8 @@ constexpr size_t MAX_TRI_BUFFER = 256;
 Interpreter::Interpreter() {
     mRsp = new RSP();
     mRdp = new RDP();
-    mBufVbo = new float[MAX_TRI_BUFFER * (32 * 3)];
+    // SOH [Enhancement] 40 (was 32) floats/vertex max to leave headroom for the toon normal attribute.
+    mBufVbo = new float[MAX_TRI_BUFFER * (VBO_MAX_FLOATS_PER_VERTEX * 3)];
 }
 
 Interpreter::~Interpreter() {
@@ -138,6 +139,9 @@ static constexpr float N64_PRIM_DEPTH_MAX = 32767.0f;
 void Interpreter::Flush() {
     if (mBufVboLen > 0) {
         mRapi->SetCurrentPrimDepth((float)mRdp->prim_depth / N64_PRIM_DEPTH_MAX);
+        // SOH [Enhancement] Push the dominant toon light for this batch. The backend only consumes it
+        // when the bound shader is a toon variant, so it is a no-op for ordinary draws.
+        mRapi->SetToonLighting(mRsp->toon_light_dir, mRsp->toon_light_color, mRsp->toon_ambient);
         mRapi->DrawTriangles(mBufVbo, mBufVboLen, mBufVboNumTris);
         mBufVboLen = 0;
         mBufVboNumTris = 0;
@@ -1483,6 +1487,57 @@ void Interpreter::CalculateNormalDir(const F3DLight_t* light, float coeffs[3]) {
     Interpreter::NormalizeVector(coeffs);
 }
 
+// SOH [Enhancement] Resolve the single effective light for the current object's toon shading:
+// ambient from the binding's ambient light, and the key direction/colour from the application-supplied
+// gSPToonKey (defaulting to a straight-on white key if none was provided this batch). The application
+// chooses and eases the key; the renderer just consumes it.
+void Interpreter::SelectToonLight() {
+    int amb_idx = mRsp->current_num_lights - 1;
+    if (amb_idx < 0) {
+        amb_idx = 0;
+    }
+    mRsp->toon_ambient[0] = mRsp->current_lights[amb_idx].l.col[0] / 255.0f;
+    mRsp->toon_ambient[1] = mRsp->current_lights[amb_idx].l.col[1] / 255.0f;
+    mRsp->toon_ambient[2] = mRsp->current_lights[amb_idx].l.col[2] / 255.0f;
+
+    // SOH [Enhancement] The game supplies one world-space key light per object via gSPToonKey. The
+    // forwarded normals are world-space too (see GfxSpVertex), so the key is used as-is — no
+    // object-space transform (which would only be correct for one limb of a batched skeletal actor,
+    // but they share a single light uniform). The game drives a single Wind Waker-style key (sun by
+    // day, animating to torches at night).
+    if (!mRsp->toon_key_valid) {
+        // A toon batch reached here with no key supplied. Not expected in normal use — the game emits
+        // gSPToonKey before every object's geometry — so default to a straight-on white key that at
+        // least lights the object evenly rather than leaving the shade undefined.
+        mRsp->toon_light_dir[0] = 0.0f;
+        mRsp->toon_light_dir[1] = 0.0f;
+        mRsp->toon_light_dir[2] = 1.0f;
+        mRsp->toon_light_color[0] = 1.0f;
+        mRsp->toon_light_color[1] = 1.0f;
+        mRsp->toon_light_color[2] = 1.0f;
+        return;
+    }
+
+    mRsp->toon_light_dir[0] = mRsp->toon_key_dir[0];
+    mRsp->toon_light_dir[1] = mRsp->toon_key_dir[1];
+    mRsp->toon_light_dir[2] = mRsp->toon_key_dir[2];
+    // Guard a zero-length key (s8 quantization can collapse a small direction) so NormalizeVector
+    // doesn't divide by zero and produce NaNs — fall back to straight-on.
+    float key_len2 = mRsp->toon_light_dir[0] * mRsp->toon_light_dir[0] +
+                     mRsp->toon_light_dir[1] * mRsp->toon_light_dir[1] +
+                     mRsp->toon_light_dir[2] * mRsp->toon_light_dir[2];
+    if (key_len2 < 1e-8f) {
+        mRsp->toon_light_dir[0] = 0.0f;
+        mRsp->toon_light_dir[1] = 0.0f;
+        mRsp->toon_light_dir[2] = 1.0f;
+    } else {
+        NormalizeVector(mRsp->toon_light_dir);
+    }
+    mRsp->toon_light_color[0] = mRsp->toon_key_color[0];
+    mRsp->toon_light_color[1] = mRsp->toon_key_color[1];
+    mRsp->toon_light_color[2] = mRsp->toon_key_color[2];
+}
+
 void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
     float matrix[4][4];
 
@@ -1624,6 +1679,9 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
                 static const Light_t lookat_y = {{0, 0, 0}, 0, {0, 0, 0}, 0, {0, 127, 0}, 0};*/
                 CalculateNormalDir(&mRsp->lookat[0], mRsp->current_lookat_coeffs[0]);
                 CalculateNormalDir(&mRsp->lookat[1], mRsp->current_lookat_coeffs[1]);
+                if (mRdp->toon) { // SOH [Enhancement] toon lighting: cache the dominant light
+                    SelectToonLight();
+                }
                 mRsp->lights_changed = false;
             }
 
@@ -1686,6 +1744,29 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
             d->color.r = r > 255 ? 255 : r;
             d->color.g = g > 255 ? 255 : g;
             d->color.b = b > 255 ? 255 : b;
+
+            // SOH [Enhancement] Toon lighting: forward the WORLD-space normal to the fragment shader
+            // and neutralize the vertex shade so the combiner emits pure albedo. The fragment shader
+            // then re-lights it with the single dominant light (also world-space, see SelectToonLight)
+            // through the toon ramp.
+            //
+            // The normal must be transformed object->world here, NOT left in object space: a skeletal
+            // actor (Link, NPCs) draws every limb under its own modelview matrix but batches them into
+            // a single draw call, while the light direction is one per-batch uniform. Object-space
+            // normals would each be in a different limb's space yet share that one uniform, so only one
+            // limb could ever be lit correctly. Transforming into world space puts every limb's normal
+            // in the same frame as the world-space key, so the single uniform is correct for all limbs.
+            // (object->world uses the same row-vector convention as the position transform above; the
+            // shader renormalizes, so uniform limb scale is harmless.)
+            if (mRdp->toon) {
+                float(*mv)[4] = mRsp->modelview_matrix_stack[mRsp->modelview_matrix_stack_size - 1];
+                d->nx = vn->n[0] * mv[0][0] + vn->n[1] * mv[1][0] + vn->n[2] * mv[2][0];
+                d->ny = vn->n[0] * mv[0][1] + vn->n[1] * mv[1][1] + vn->n[2] * mv[2][1];
+                d->nz = vn->n[0] * mv[0][2] + vn->n[1] * mv[1][2] + vn->n[2] * mv[2][2];
+                d->color.r = 255;
+                d->color.g = 255;
+                d->color.b = 255;
+            }
 
             if (mRsp->geometry_mode & G_TEXTURE_GEN) {
                 float dotx = 0, doty = 0;
@@ -1885,6 +1966,8 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
         (mRdp->other_mode_l & (3 << 24)) == (G_BL_0 << 24) && (mRdp->other_mode_l & (3 << 20)) == (G_BL_CLR_MEM << 20);
     bool use_grayscale = mRdp->grayscale;
     bool use_prim_depth = (mRdp->other_mode_l & G_ZS_PRIM) != 0;
+    // SOH [Enhancement] Toon lighting only applies to lit geometry (where vertex normals exist).
+    bool use_toon = mRdp->toon && (mRsp->geometry_mode & G_LIGHTING);
 
     if (texture_edge) {
         if (use_alpha) {
@@ -1928,6 +2011,9 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
         cc_options |= -1 << SHADER_ID_SHIFT;
     }
 
+    if (use_toon) {
+        cc_options |= SHADER_OPT(TOON);
+    }
     if (mRdp->loaded_texture[0].masked) {
         cc_options |= SHADER_OPT(TEXEL0_MASK);
     }
@@ -2178,6 +2264,14 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
             mBufVbo[mBufVboLen++] = mRdp->grayscale_color.g / 255.0f;
             mBufVbo[mBufVboLen++] = mRdp->grayscale_color.b / 255.0f;
             mBufVbo[mBufVboLen++] = mRdp->grayscale_color.a / 255.0f; // lerp interpolation factor (not alpha)
+        }
+
+        // SOH [Enhancement] Toon lighting: world-space normal (aNormal). The dominant light/ambient
+        // are sent as uniforms (per draw), not per-vertex, to stay within the vertex-attribute limit.
+        if (use_toon) {
+            mBufVbo[mBufVboLen++] = v_arr[i]->nx;
+            mBufVbo[mBufVboLen++] = v_arr[i]->ny;
+            mBufVbo[mBufVboLen++] = v_arr[i]->nz;
         }
 
         for (int j = 0; j < numInputs; j++) {
@@ -4281,6 +4375,45 @@ bool gfx_set_grayscale_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
+// SOH [Enhancement] Toon lighting per-draw marker (mirrors grayscale).
+bool gfx_set_toon_handler_custom(F3DGfx** cmd0) {
+    Interpreter* gfx = mInstance.lock().get();
+    F3DGfx* cmd = *cmd0;
+
+    gfx->mRdp->toon = cmd->words.w1;
+    // A fresh key must be supplied (per object) after each toon-on; clear any stale one.
+    gfx->mRsp->toon_key_valid = false;
+    return false;
+}
+
+// SOH [Enhancement] Per-object toon key light: world-space direction (3x s8 / 127) + color (3x u8 / 255).
+bool gfx_set_toon_key_handler_custom(F3DGfx** cmd0) {
+    Interpreter* gfx = mInstance.lock().get();
+    F3DGfx* cmd = *cmd0;
+
+    // SOH [Enhancement] The toon key light is pushed to the GPU once per batch (see Flush) as a single
+    // world-space direction + color. Several objects that share texture/state are otherwise batched into
+    // one draw, so they would all be lit by whichever object's key was set last — each object picks its
+    // own key (the nearest light, or the sun), so a shared batch would mislight all but the last. Flush
+    // the pending geometry now, with the PREVIOUS object's key still in effect, so every toon object
+    // becomes its own correctly-lit batch.
+    gfx->Flush();
+
+    int8_t dx = (cmd->words.w0 >> 16) & 0xFF;
+    int8_t dy = (cmd->words.w0 >> 8) & 0xFF;
+    int8_t dz = (cmd->words.w0 >> 0) & 0xFF;
+    gfx->mRsp->toon_key_dir[0] = dx / 127.0f;
+    gfx->mRsp->toon_key_dir[1] = dy / 127.0f;
+    gfx->mRsp->toon_key_dir[2] = dz / 127.0f;
+    gfx->mRsp->toon_key_color[0] = ((cmd->words.w1 >> 16) & 0xFF) / 255.0f;
+    gfx->mRsp->toon_key_color[1] = ((cmd->words.w1 >> 8) & 0xFF) / 255.0f;
+    gfx->mRsp->toon_key_color[2] = ((cmd->words.w1 >> 0) & 0xFF) / 255.0f;
+    gfx->mRsp->toon_key_valid = true;
+    // The key changes the effective light, so force a recompute on the next vertex.
+    gfx->mRsp->lights_changed = true;
+    return false;
+}
+
 bool gfx_load_block_handler_rdp(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *cmd0;
@@ -4772,6 +4905,8 @@ static constexpr UcodeHandler otrHandlers = {
       { "G_REGBLENDEDTEX", gfx_register_blended_texture_handler_custom } },         // G_REGBLENDEDTEX (0x3f)
     { OTR_G_SETINTENSITY, { "G_SETINTENSITY", gfx_set_intensity_handler_custom } }, // G_SETINTENSITY (0x40)
     { OTR_G_FOGF, { "G_FOGF", gfx_fog_factor_float_handler_custom } },              // G_FOGF (0x41)
+    { OTR_G_SETTOON, { "G_SETTOON", gfx_set_toon_handler_custom } },                // G_SETTOON (0x4b)
+    { OTR_G_SETTOONKEY, { "G_SETTOONKEY", gfx_set_toon_key_handler_custom } },      // G_SETTOONKEY (0x4c)
     { OTR_G_MOVEMEM_HASH, { "OTR_G_MOVEMEM_HASH", gfx_movemem_handler_otr } },      // OTR_G_MOVEMEM_HASH
     { OTR_G_PUSH_SHADER, { "G_PUSH_SHADER", gfx_push_shader } },
     { OTR_G_POP_SHADER, { "G_POP_SHADER", gfx_pop_shader } },
@@ -5463,6 +5598,7 @@ void gfx_cc_get_features(uint64_t shader_id0, uint64_t shader_id1, struct CCFeat
     cc_features->opt_invisible = (shader_id1 & SHADER_OPT(INVISIBLE)) != 0;
     cc_features->opt_grayscale = (shader_id1 & SHADER_OPT(GRAYSCALE)) != 0;
     cc_features->opt_prim_depth = (shader_id1 & SHADER_OPT(PRIM_DEPTH)) != 0;
+    cc_features->opt_toon = (shader_id1 & SHADER_OPT(TOON)) != 0; // SOH [Enhancement] toon lighting
 
     cc_features->clamp[0][0] = shader_id1 & SHADER_OPT(TEXEL0_CLAMP_S);
     cc_features->clamp[0][1] = shader_id1 & SHADER_OPT(TEXEL0_CLAMP_T);

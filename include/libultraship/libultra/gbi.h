@@ -198,6 +198,8 @@
 #define G_SETTILESIZE_INTERP 0x45
 #define G_SETTARGETINTERPINDEX 0x46
 #define G_SETTILESIZE_LERP 0x4a
+#define G_SETTOON 0x4b
+#define G_SETTOONKEY 0x4c
 
 /*
  * The following commands are the "generated" RDP commands; the user
@@ -2841,6 +2843,29 @@ typedef union Gfx {
     { (_SHIFTL(G_PUSH_SHADER, 24, 8)), (uintptr_t)(shader) }, { \
         0, 0                                                    \
     }
+// SOH [Enhancement] Toon lighting per-draw marker (mirrors gSPGrayscale).
+#define gSPToon(pkt, state)                       \
+    {                                             \
+        Gfx* _g = (Gfx*)(pkt);                    \
+                                                  \
+        _g->words.w0 = _SHIFTL(G_SETTOON, 24, 8); \
+        _g->words.w1 = state;                     \
+    }
+
+#define gsSPToon(state) \
+    { (_SHIFTL(G_SETTOON, 24, 8)), (state) }
+
+// SOH [Enhancement] Toon lighting per-object key light. dx/dy/dz are the signed key direction
+// (world space, * 127) and r/g/b the key light color, packed into the two command words.
+#define gSPToonKey(pkt, dx, dy, dz, r, g, b)                                                                     \
+    {                                                                                                            \
+        Gfx* _g = (Gfx*)(pkt);                                                                                   \
+                                                                                                                \
+        _g->words.w0 = _SHIFTL(G_SETTOONKEY, 24, 8) | _SHIFTL((dx) & 0xFF, 16, 8) | _SHIFTL((dy) & 0xFF, 8, 8) | \
+                       _SHIFTL((dz) & 0xFF, 0, 8);                                                              \
+        _g->words.w1 = _SHIFTL((r) & 0xFF, 16, 8) | _SHIFTL((g) & 0xFF, 8, 8) | _SHIFTL((b) & 0xFF, 0, 8);      \
+    }
+
 
 #define gSPPushShader(pkt, shader)                     \
     {                                                  \
