@@ -1,13 +1,38 @@
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/cvars.cmake)
 
-add_library(libultraship STATIC)
-set_target_properties(libultraship PROPERTIES PREFIX "")
+if(LUS_BUILD_SHARED)
+    add_library(libultraship SHARED)
+    set_target_properties(libultraship PROPERTIES PREFIX "")
+    target_compile_definitions(libultraship PUBLIC LUS_SHARED_LIBRARY)
+else()
+    add_library(libultraship STATIC)
+    set_target_properties(libultraship PROPERTIES PREFIX "")
+    set_target_properties(libultraship PROPERTIES ENABLE_EXPORTS TRUE)
+    set_target_properties(libultraship PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+endif()
 set_property(TARGET libultraship PROPERTY CXX_STANDARD 20)
 # Need to set C11 for libgfxd (_Alignas)
 set_property(TARGET libultraship PROPERTY C_STANDARD 11)
-set_target_properties(libultraship PROPERTIES ENABLE_EXPORTS TRUE)
-set_target_properties(libultraship PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+if(LUS_BUILD_SHARED AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    # Our own .def pipeline: WINDOWS_EXPORT_ALL_SYMBOLS runs its scan after any PRE_LINK
+    # filter, so the bogus '=' symbols could never be stripped.
+    set_target_properties(libultraship PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS FALSE)
+    set(LUS_OBJ_LIST "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/lus_objects.txt")
+    set(LUS_DEF_FILE "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/lus_exports.def")
+    file(GENERATE OUTPUT "${LUS_OBJ_LIST}"
+        CONTENT "$<JOIN:$<TARGET_OBJECTS:libultraship>,\n>\n")
+
+    add_custom_command(TARGET libultraship PRE_LINK
+        COMMAND ${CMAKE_COMMAND} -E __create_def "${LUS_DEF_FILE}" "${LUS_OBJ_LIST}"
+        COMMAND ${CMAKE_COMMAND} -D "DEF_FILE=${LUS_DEF_FILE}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/filter_def.cmake"
+        COMMENT "Generating libultraship export def"
+        VERBATIM
+    )
+    target_link_options(libultraship PRIVATE "/DEF:${LUS_DEF_FILE}")
+endif()
 
 set(INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 option(USE_OPENGLES "Enable GLES3" OFF)
@@ -83,7 +108,8 @@ target_link_libraries(libultraship
     PUBLIC ImGui
 )
 
-target_link_libraries(libultraship PRIVATE stb)
+# PUBLIC: the games call stb and libzip directly, and a shared LUS does not re-expose PRIVATE deps.
+target_link_libraries(libultraship PUBLIC stb)
 
 if (GFX_DEBUG_DISASSEMBLER)
     target_link_libraries(libultraship PRIVATE libgfxd)
@@ -91,9 +117,8 @@ endif()
 
 find_package(libzip REQUIRED)
 # SOH [WASM] The public header O2rArchive.h includes <zip.h>, so consumers need libzip's
-# include path too. On desktop that is masked by libzip living in a system include dir;
-# with the source build used for wasm it is not, so propagate it there.
-if(EMSCRIPTEN)
+# include path too. On desktop that is masked by libzip living in a system include dir.
+if(EMSCRIPTEN OR LUS_BUILD_SHARED)
     target_link_libraries(libultraship PUBLIC libzip::zip)
 else()
     target_link_libraries(libultraship PRIVATE libzip::zip)

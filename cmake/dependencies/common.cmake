@@ -112,6 +112,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(prism)
 
+# prism hard-codes /MT through its compile options, which overrides MSVC_RUNTIME_LIBRARY;
+# a shared LUS needs the DLL CRT or it fails with LNK2038 against prism.lib.
+if(MSVC AND LUS_BUILD_SHARED AND TARGET prism)
+    get_target_property(_prism_opts prism COMPILE_OPTIONS)
+    if(_prism_opts)
+        string(REPLACE "/MTd" "/MDd" _prism_opts "${_prism_opts}")
+        string(REPLACE "/MT" "/MD" _prism_opts "${_prism_opts}")
+        set_target_properties(prism PROPERTIES COMPILE_OPTIONS "${_prism_opts}")
+    endif()
+endif()
 # prism's CMakeLists.txt calls cmake_minimum_required(VERSION <3.10), which causes
 # CMake to explicitly set CMP0141=OLD in prism's scope (cmake_policy(VERSION) disables
 # all policies newer than the specified version).  With CMP0141=OLD the compile

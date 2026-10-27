@@ -355,7 +355,12 @@ typedef enum Attribute {
     MV_LIGHT,
 } Attribute;
 
+// Data, unlike functions, needs an explicit dllimport to cross into a shared libultraship.
+#if defined(_WIN32) && defined(LUS_SHARED_LIBRARY) && !defined(libultraship_EXPORTS)
+extern __declspec(dllimport) GfxExecStack g_exec_stack;
+#else
 extern GfxExecStack g_exec_stack;
+#endif
 
 struct GfxTextureCache {
     TextureCacheMap map;

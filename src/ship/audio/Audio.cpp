@@ -9,6 +9,8 @@
 #include "ship/config/Config.h"
 #include "ship/controller/controldeck/ControlDeck.h"
 
+#include <cstdlib>
+
 namespace Ship {
 
 Audio::~Audio() {
@@ -65,7 +67,7 @@ void Audio::FallBackToSdl(const char* why) {
 }
 
 void Audio::Init() {
-    mConfig = Context::GetRawInstance()->GetConfig();
+    mConfig = Context::GetRawInstance()->GetHostConfig();
 
     mAvailableAudioBackends = std::make_shared<std::vector<AudioBackend>>();
 #ifdef _WIN32
@@ -114,6 +116,13 @@ AudioBackend Audio::GetCurrentAudioBackend() {
 
 AudioBackend Audio::GetSavedAudioBackend() {
     std::string backendName = mConfig->GetString("Window.AudioBackend");
+
+    // Environment wins over the config, like SHIP_HOME; it is the only way to reach CoreAudio on macOS.
+    const char* env = std::getenv("SHIP_AUDIO_BACKEND");
+    const bool fromEnv = env != nullptr && *env != '\0';
+    if (fromEnv) {
+        backendName = env;
+    }
     if (backendName == "wasapi") {
         return AudioBackend::WASAPI;
     }
@@ -126,6 +135,17 @@ AudioBackend Audio::GetSavedAudioBackend() {
     }
 
     if (backendName == "coreaudio") {
+#ifdef __APPLE__
+        // The CoreAudio player persistently changes the device's system-wide sample rate.
+        if (!fromEnv) {
+            mConfig->SetString("Window.AudioBackend", "sdl");
+            mConfig->Save();
+            SPDLOG_WARN("macOS: forcing Window.AudioBackend sdl (was coreaudio). The CoreAudio player "
+                        "reconfigures the output device's sample rate system-wide and persistently. "
+                        "Set SHIP_AUDIO_BACKEND=coreaudio to override.");
+            return AudioBackend::SDL;
+        }
+#endif
         return AudioBackend::COREAUDIO;
     }
 
@@ -148,7 +168,7 @@ AudioBackend Audio::GetSavedAudioBackend() {
 #endif
 
 #ifdef __APPLE__
-    return AudioBackend::COREAUDIO;
+    return AudioBackend::SDL;
 #endif
 
 #ifdef __EMSCRIPTEN__

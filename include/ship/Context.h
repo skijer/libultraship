@@ -155,12 +155,16 @@ class Context {
 
     /** @brief Returns the application-wide spdlog logger. */
     std::shared_ptr<spdlog::logger> GetLogger() const;
-    /** @brief Returns the Config subsystem. */
+    /** @brief Returns the settings of the game running on this thread (see GameRegistry), else the Context's. */
     std::shared_ptr<Config> GetConfig() const;
-    /** @brief Returns the ConsoleVariable subsystem (CVars). */
+    /** @brief Returns the Context's own settings: window, renderer, audio backend and shortcuts. */
+    std::shared_ptr<Config> GetHostConfig() const;
+    /** @brief Returns the CVars of the game running on this thread (see GameRegistry), else the Context's. */
     std::shared_ptr<ConsoleVariable> GetConsoleVariables() const;
-    /** @brief Returns the ResourceManager subsystem. */
+    /** @brief Returns the ResourceManager of the game running on this thread, else the Context's. */
     std::shared_ptr<ResourceManager> GetResourceManager() const;
+    /** @brief Replaces the Context's own ResourceManager without destroying the previous one. */
+    void SetResourceManager(std::shared_ptr<ResourceManager> resourceManager);
     /** @brief Returns the ControlDeck subsystem. */
     std::shared_ptr<ControlDeck> GetControlDeck() const;
     /** @brief Returns the CrashHandler subsystem. */

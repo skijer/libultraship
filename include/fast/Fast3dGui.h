@@ -140,6 +140,8 @@ class Fast3dGui : public Ship::Gui {
 
     void RefreshImGuiGamepads() override;
 
+    void RebuildFontTexture() override;
+
   protected:
     void ImGuiWMInit() override;
     void ImGuiWMShutdown() override;

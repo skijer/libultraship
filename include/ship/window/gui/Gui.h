@@ -48,6 +48,15 @@ class Gui {
      */
     void Init();
 
+    // Returns the Dear ImGui context created in libultraship.dll. Game DLLs (soh/2ship) must
+    // call ImGui::SetCurrentContext() with this, because ImGui's current-context global (GImGui)
+    // is a per-module static — each DLL has its own and the game's starts out null.
+    ImGuiContext* GetImGuiContext();
+    // Call after adding fonts to an atlas the backend already built, or NewFrame asserts.
+    virtual void RebuildFontTexture();
+    // Registers Font and GuiTexture on the current ResourceManager; each game with its own must call it.
+    void RegisterResourceFactories();
+
     /**
      * @brief Begins a new ImGui frame.
      *

@@ -221,6 +221,40 @@ void Fast3dGui::ImGuiBackendNewFrame() {
     }
 }
 
+void Fast3dGui::RebuildFontTexture() {
+    // Release the backend's font texture/device objects. The renderer backends only build their
+    // font texture once (lazily, when it doesn't yet exist), so adding fonts to the shared atlas
+    // after the texture was already built leaves the atlas with TexReady=false. Invalidating here
+    // forces the next ImGuiBackendNewFrame() to recreate the texture from the full atlas.
+    switch (Ship::Context::GetRawInstance()->GetWindow()->GetWindowBackend()) {
+#ifdef ENABLE_OPENGL
+        case WindowBackend::FAST3D_SDL_OPENGL:
+            // ImGui_ImplOpenGL3_NewFrame() recreates the font texture if it has been destroyed.
+            ImGui_ImplOpenGL3_DestroyFontsTexture();
+            break;
+#endif
+
+#ifdef ENABLE_DX11
+        case WindowBackend::FAST3D_DXGI_DX11:
+            // ImGui_ImplDX11_NewFrame() rebuilds device objects (incl. font texture) when pFontSampler is null.
+            ImGui_ImplDX11_InvalidateDeviceObjects();
+            break;
+#endif
+
+#ifdef __APPLE__
+        case WindowBackend::FAST3D_SDL_METAL:
+            // Metal's NewFrame never recreates a dropped font texture, so rebuild it directly.
+            if (auto interpreter = mInterpreter.lock()) {
+                ((GfxRenderingAPIMetal*)interpreter->GetCurrentRenderingAPI())->RebuildFontsTexture();
+            }
+            break;
+#endif
+
+        default:
+            break;
+    }
+}
+
 void Fast3dGui::ImGuiWMNewFrame() {
     switch (mImpl.Backend) {
         case WindowBackend::FAST3D_SDL_OPENGL:

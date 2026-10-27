@@ -35,13 +35,27 @@ std::string Config::FormatNestedKey(const std::string& key) {
     return tmp;
 }
 
+bool Config::TryUnflatten(nlohmann::json& out) {
+    try {
+        out = mFlattenedJson.unflatten();
+        return true;
+    } catch (const nlohmann::json::exception& e) {
+        SPDLOG_ERROR("Failed to unflatten config {}: {}", mPath, e.what());
+        return false;
+    }
+}
+
 nlohmann::json Config::Nested(const std::string& key) {
     std::vector<std::string> dots = StringHelper::Split(key, ".");
     if (!mFlattenedJson.is_object()) {
         return mFlattenedJson;
     }
 
-    nlohmann::json gjson = mFlattenedJson.unflatten();
+    // On a key clash, fall back to the last state that unflattened.
+    nlohmann::json gjson;
+    if (!TryUnflatten(gjson)) {
+        gjson = mNestedJson;
+    }
 
     if (dots.size() > 1) {
         for (auto& dot : dots) {
@@ -129,7 +143,10 @@ void Config::Erase(const std::string& key) {
 }
 
 void Config::SetBlock(const std::string& key, nlohmann::json block) {
-    nlohmann::json gjson = mFlattenedJson.unflatten();
+    nlohmann::json gjson;
+    if (!TryUnflatten(gjson)) {
+        return;
+    }
     if (key.find(".") != std::string::npos) {
         nlohmann::json* gjson2 = &gjson;
         std::vector<std::string> dots = StringHelper::Split(key, ".");
@@ -147,6 +164,13 @@ void Config::SetBlock(const std::string& key, nlohmann::json block) {
                 } else if (gjson2->contains(dot)) {
                     gjson2 = &gjson2->at(dot);
                     curDot++;
+                } else {
+                    // Create missing intermediate keys instead of silently dropping the write.
+                    if (!gjson2->is_object()) {
+                        return;
+                    }
+                    gjson2 = &((*gjson2)[dot] = nlohmann::json::object());
+                    curDot++;
                 }
             }
         }
@@ -158,7 +182,10 @@ void Config::SetBlock(const std::string& key, nlohmann::json block) {
 }
 
 void Config::EraseBlock(const std::string& key) {
-    nlohmann::json gjson = mFlattenedJson.unflatten();
+    nlohmann::json gjson;
+    if (!TryUnflatten(gjson)) {
+        return;
+    }
     if (key.find(".") != std::string::npos) {
         nlohmann::json* gjson2 = &gjson;
         std::vector<std::string> dots = StringHelper::Split(key, ".");
@@ -212,9 +239,34 @@ void Config::Reload() {
 }
 
 void Config::Save() {
-    std::ofstream file(mPath);
-    mNestedJson = mFlattenedJson.unflatten();
-    file << mNestedJson.dump(4);
+    // Unflatten before truncating the file: a leaf-vs-subtree key clash must not lose the config.
+    if (!TryUnflatten(mNestedJson)) {
+        return;
+    }
+    const fs::path configPath(mPath);
+    const fs::path tempPath = configPath.parent_path() / (configPath.filename().string() + ".tmp");
+    std::error_code ec;
+    {
+        std::ofstream file(tempPath, std::ios::binary | std::ios::trunc);
+        if (!file.is_open()) {
+            SPDLOG_ERROR("Could not open \"{}\" to save config", tempPath.string());
+            return;
+        }
+        file << mNestedJson.dump(4);
+        file.flush();
+        if (!file.good()) {
+            SPDLOG_ERROR("Could not write \"{}\"; keeping the existing config", tempPath.string());
+            file.close();
+            fs::remove(tempPath, ec);
+            return;
+        }
+    }
+    fs::rename(tempPath, configPath, ec);
+    if (ec) {
+        SPDLOG_ERROR("Could not replace config \"{}\": {}", mPath, ec.message());
+        std::error_code removeEc;
+        fs::remove(tempPath, removeEc);
+    }
 }
 
 template <typename T> std::vector<T> Config::GetArray(const std::string& key) {

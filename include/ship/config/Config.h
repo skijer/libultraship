@@ -226,6 +226,9 @@ class Config {
     template <typename T> std::vector<T> GetArray(const std::string& key);
 
   private:
+    // unflatten throws on a leaf-vs-subtree key clash; this keeps it from unwinding across modules.
+    bool TryUnflatten(nlohmann::json& out);
+
     nlohmann::json mFlattenedJson;
     nlohmann::json mNestedJson;
     std::string mPath;

@@ -12,7 +12,10 @@
 
 namespace Ship {
 
-ConsoleVariable::ConsoleVariable() {
+ConsoleVariable::ConsoleVariable() : ConsoleVariable(Context::GetRawInstance()->GetHostConfig()) {
+}
+
+ConsoleVariable::ConsoleVariable(std::shared_ptr<Config> config) : mConfig(std::move(config)) {
     Load();
 }
 
@@ -20,7 +23,59 @@ ConsoleVariable::~ConsoleVariable() {
     SPDLOG_TRACE("destruct console variables");
 }
 
+void ConsoleVariable::DelegateToHost(std::shared_ptr<ConsoleVariable> host, std::vector<std::string> keys) {
+    mHost = std::move(host);
+    mHostKeys = std::move(keys);
+}
+
+const std::vector<std::string>& ConsoleVariable::GetEngineKeys() {
+    static const std::vector<std::string> sKeys = {
+        CVAR_VSYNC_ENABLED,
+        CVAR_Z_FIGHTING_MODE,
+        CVAR_INTERNAL_RESOLUTION,
+        CVAR_MSAA_VALUE,
+        CVAR_SDL_WINDOWED_FULLSCREEN,
+        CVAR_TEXTURE_FILTER,
+        CVAR_IMGUI_CONTROLLER_NAV,
+        CVAR_CONSOLE_WINDOW_OPEN,
+        CVAR_CONTROLLER_CONFIGURATION_WINDOW_OPEN,
+        CVAR_CONTROLLER_DISCONNECTED_WINDOW_OPEN,
+        CVAR_CONTROLLER_REORDERING_WINDOW_OPEN,
+        CVAR_GFX_DEBUGGER_WINDOW_OPEN,
+        CVAR_STATS_WINDOW_OPEN,
+        CVAR_ENABLE_MULTI_VIEWPORTS,
+        CVAR_LOW_RES_MODE,
+        CVAR_SIMULATED_INPUT_LAG,
+        CVAR_GAME_OVERLAY_FONT,
+        CVAR_MENU_BAR_OPEN,
+        CVAR_PREFIX_CONTROLLERS,
+        CVAR_PREFIX_ADVANCED_RESOLUTION,
+        CVAR_AUDIO_CHANNELS_SETTING,
+        CVAR_ALLOW_BACKGROUND_INPUTS,
+        CVAR_SCRIPT_SAFE_LEVEL,
+    };
+    return sKeys;
+}
+
+ConsoleVariable* ConsoleVariable::GetHostFor(std::string_view name) const {
+    if (mHost == nullptr) {
+        return nullptr;
+    }
+    for (const std::string& key : mHostKeys) {
+        if (!name.starts_with(key)) {
+            continue;
+        }
+        if (name.size() == key.size() || name[key.size()] == '.') {
+            return mHost.get();
+        }
+    }
+    return nullptr;
+}
+
 std::shared_ptr<CVar> ConsoleVariable::Get(const char* name) {
+    if (auto host = GetHostFor(name)) {
+        return host->Get(name);
+    }
     auto it = mVariables.find(name);
     return it != mVariables.end() ? it->second : nullptr;
 }
@@ -89,6 +144,10 @@ Color_RGB8 ConsoleVariable::GetColor24(const char* name, Color_RGB8 defaultValue
 }
 
 void ConsoleVariable::SetInteger(const char* name, int32_t value) {
+    if (auto host = GetHostFor(name)) {
+        host->SetInteger(name, value);
+        return;
+    }
     auto& variable = mVariables[name];
     if (variable == nullptr) {
         variable = std::make_shared<CVar>();
@@ -99,6 +158,10 @@ void ConsoleVariable::SetInteger(const char* name, int32_t value) {
 }
 
 void ConsoleVariable::SetFloat(const char* name, float value) {
+    if (auto host = GetHostFor(name)) {
+        host->SetFloat(name, value);
+        return;
+    }
     auto& variable = mVariables[name];
     if (variable == nullptr) {
         variable = std::make_shared<CVar>();
@@ -109,6 +172,10 @@ void ConsoleVariable::SetFloat(const char* name, float value) {
 }
 
 void ConsoleVariable::SetString(const char* name, const char* value) {
+    if (auto host = GetHostFor(name)) {
+        host->SetString(name, value);
+        return;
+    }
     auto& variable = mVariables[name];
     if (variable == nullptr) {
         variable = std::make_shared<CVar>();
@@ -122,6 +189,10 @@ void ConsoleVariable::SetString(const char* name, const char* value) {
 }
 
 void ConsoleVariable::SetColor(const char* name, Color_RGBA8 value) {
+    if (auto host = GetHostFor(name)) {
+        host->SetColor(name, value);
+        return;
+    }
     auto& variable = mVariables[name];
     if (!variable) {
         variable = std::make_shared<CVar>();
@@ -132,6 +203,10 @@ void ConsoleVariable::SetColor(const char* name, Color_RGBA8 value) {
 }
 
 void ConsoleVariable::SetColor24(const char* name, Color_RGB8 value) {
+    if (auto host = GetHostFor(name)) {
+        host->SetColor24(name, value);
+        return;
+    }
     auto& variable = mVariables[name];
     if (!variable) {
         variable = std::make_shared<CVar>();
@@ -172,7 +247,11 @@ void ConsoleVariable::RegisterColor24(const char* name, Color_RGB8 defaultValue)
 }
 
 void ConsoleVariable::ClearVariable(const char* name) {
-    std::shared_ptr<Config> conf = Context::GetRawInstance()->GetConfig();
+    if (auto host = GetHostFor(name)) {
+        host->ClearVariable(name);
+        return;
+    }
+    std::shared_ptr<Config> conf = mConfig;
     auto var = Get(name);
     if (var != nullptr) {
         bool color = var->Type == ConsoleVariableType::Color || var->Type == ConsoleVariableType::Color24;
@@ -202,46 +281,48 @@ void ConsoleVariable::ClearVariable(const char* name) {
 }
 
 void ConsoleVariable::ClearBlock(const char* name) {
-    std::shared_ptr<Config> conf = Context::GetRawInstance()->GetConfig();
-    conf->EraseBlock(StringHelper::Sprintf("CVars.%s", name));
+    if (auto host = GetHostFor(name)) {
+        host->ClearBlock(name);
+        return;
+    }
+    mConfig->EraseBlock(StringHelper::Sprintf("CVars.%s", name));
     Load();
 }
 
+// Goes through the typed accessors so a copy between this store and the host lands in the right one.
 void ConsoleVariable::CopyVariable(const char* from, const char* to) {
-    auto& variableFrom = mVariables[from];
-    if (!variableFrom) {
+    auto variableFrom = Get(from);
+    if (variableFrom == nullptr || std::string_view(from) == to) {
         return;
     }
-    auto& variableTo = mVariables[to];
-    if (!variableTo) {
-        variableTo = std::make_shared<CVar>();
-    }
 
-    variableTo->Type = variableFrom->Type;
-    switch (variableTo->Type) {
+    switch (variableFrom->Type) {
         case ConsoleVariableType::Integer:
-            variableTo->Integer = variableFrom->Integer;
+            SetInteger(to, variableFrom->Integer);
             break;
         case ConsoleVariableType::Float:
-            variableTo->Float = variableFrom->Float;
+            SetFloat(to, variableFrom->Float);
             break;
         case ConsoleVariableType::String:
-            if (variableTo->String != nullptr) {
-                free(variableTo->String);
-            }
-            variableTo->String = strdup(variableFrom->String);
+            SetString(to, variableFrom->String);
             break;
         case ConsoleVariableType::Color:
-            variableTo->Color = variableFrom->Color;
+            SetColor(to, variableFrom->Color);
             break;
         case ConsoleVariableType::Color24:
-            variableTo->Color24 = variableFrom->Color24;
+            SetColor24(to, variableFrom->Color24);
+            break;
+        default:
+            SPDLOG_ERROR("CopyVariable: unknown type {} for {}", static_cast<int>(variableFrom->Type), from);
             break;
     }
 }
 
 void ConsoleVariable::Save() {
-    std::shared_ptr<Config> conf = Context::GetRawInstance()->GetConfig();
+    if (mHost != nullptr) {
+        mHost->Save();
+    }
+    std::shared_ptr<Config> conf = mConfig;
 
     for (const auto& variable : mVariables) {
         const std::string key = StringHelper::Sprintf("CVars.%s", variable.first.c_str());
@@ -277,7 +358,7 @@ void ConsoleVariable::Save() {
 }
 
 void ConsoleVariable::Load() {
-    std::shared_ptr<Config> conf = Context::GetRawInstance()->GetConfig();
+    std::shared_ptr<Config> conf = mConfig;
     conf->Reload();
     if (!mVariables.empty()) {
         mVariables.clear();

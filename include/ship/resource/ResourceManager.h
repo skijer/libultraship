@@ -10,6 +10,7 @@
 #include <variant>
 #include <future>
 #include <type_traits>
+#include "ship/GameRegistry.h"
 #include "ship/resource/Resource.h"
 #include "ship/resource/ResourceLoader.h"
 #include "ship/resource/archive/Archive.h"
@@ -420,6 +421,9 @@ class ResourceManager {
     std::shared_ptr<IResource> GetCachedResource(std::variant<ResourceLoadError, std::shared_ptr<IResource>> cacheLine);
 
   private:
+    /** @brief The game whose Context services this manager's loads must see from the calling thread. */
+    GameServices* GetGameToLoadAs() const;
+
     std::unordered_map<ResourceIdentifier, std::variant<ResourceLoadError, std::shared_ptr<IResource>>,
                        ResourceIdentifierHash>
         mResourceCache;
@@ -444,7 +448,14 @@ class ResourceManager {
         }
         return promise.get_future();
 #else
-        return mThreadPool->submit_task(std::forward<F>(func), priority);
+        // Workers run as the game owning this manager, so nested Context lookups stay in that game.
+        GameServices* owner = GameRegistry::FindByResources(this);
+        return mThreadPool->submit_task(
+            [owner, task = std::forward<F>(func)]() {
+                GameScope scope(owner);
+                return task();
+            },
+            priority);
 #endif
     }
     std::mutex mMutex;

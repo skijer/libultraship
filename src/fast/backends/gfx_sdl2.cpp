@@ -255,7 +255,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
 #endif
 
     if (!on) {
-        auto conf = Ship::Context::GetRawInstance()->GetConfig();
+        auto conf = Ship::Context::GetRawInstance()->GetHostConfig();
         mWindowWidth = conf->GetInt("Window.Width", 640);
         mWindowHeight = conf->GetInt("Window.Height", 480);
         int32_t posX = conf->GetInt("Window.PositionX", 100);
@@ -681,7 +681,10 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
             }
             break;
         case SDL_DROPFILE:
-            Ship::Context::GetRawInstance()->GetFileDropMgr()->SetDroppedFile(event.drop.file);
+            // A drop can arrive before the game created its FileDropMgr (window-only boot).
+            if (auto fileDropMgr = Ship::Context::GetRawInstance()->GetFileDropMgr()) {
+                fileDropMgr->SetDroppedFile(event.drop.file);
+            }
             break;
         case SDL_QUIT:
             Close();

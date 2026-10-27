@@ -191,6 +191,7 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     ImTextureID GetTextureById(int id) override;
 
     void NewFrame();
+    void RebuildFontsTexture();
     void SetupFloatingFrame();
     void RenderDrawData(ImDrawData* drawData);
     bool MetalInit(SDL_Renderer* renderer);

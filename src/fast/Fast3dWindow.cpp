@@ -53,8 +53,11 @@ Fast3dWindow::Fast3dWindow() : Fast3dWindow(std::vector<std::shared_ptr<Ship::Gu
 Fast3dWindow::~Fast3dWindow() {
     SPDLOG_DEBUG("destruct fast3dwindow");
     mInterpreter->Destroy();
+    SPDLOG_DEBUG("destruct fast3dwindow: interpreter destroyed");
     delete mRenderingApi;
+    SPDLOG_DEBUG("destruct fast3dwindow: rendering api deleted");
     delete mWindowManagerApi;
+    SPDLOG_DEBUG("destruct fast3dwindow: window manager api deleted");
 }
 
 void Fast3dWindow::Init() {
@@ -83,22 +86,22 @@ void Fast3dWindow::Init() {
     int32_t posX, posY;
 
     isFullscreen =
-        Ship::Context::GetRawInstance()->GetConfig()->GetBool("Window.Fullscreen.Enabled", false) || gameMode;
-    posX = Ship::Context::GetRawInstance()->GetConfig()->GetInt("Window.PositionX", 100);
-    posY = Ship::Context::GetRawInstance()->GetConfig()->GetInt("Window.PositionY", 100);
+        Ship::Context::GetRawInstance()->GetHostConfig()->GetBool("Window.Fullscreen.Enabled", false) || gameMode;
+    posX = Ship::Context::GetRawInstance()->GetHostConfig()->GetInt("Window.PositionX", 100);
+    posY = Ship::Context::GetRawInstance()->GetHostConfig()->GetInt("Window.PositionY", 100);
 
     if (isFullscreen) {
-        width = Ship::Context::GetRawInstance()->GetConfig()->GetInt("Window.Fullscreen.Width", gameMode ? 1280 : 1920);
+        width = Ship::Context::GetRawInstance()->GetHostConfig()->GetInt("Window.Fullscreen.Width", gameMode ? 1280 : 1920);
         height =
-            Ship::Context::GetRawInstance()->GetConfig()->GetInt("Window.Fullscreen.Height", gameMode ? 800 : 1080);
+            Ship::Context::GetRawInstance()->GetHostConfig()->GetInt("Window.Fullscreen.Height", gameMode ? 800 : 1080);
     } else {
-        width = Ship::Context::GetRawInstance()->GetConfig()->GetInt("Window.Width", 640);
-        height = Ship::Context::GetRawInstance()->GetConfig()->GetInt("Window.Height", 480);
+        width = Ship::Context::GetRawInstance()->GetHostConfig()->GetInt("Window.Width", 640);
+        height = Ship::Context::GetRawInstance()->GetHostConfig()->GetInt("Window.Height", 480);
     }
     Ship::Context::GetRawInstance()->GetWindow()->SetFullscreenScancode(
-        Ship::Context::GetRawInstance()->GetConfig()->GetInt("Shortcuts.Fullscreen", Ship::KbScancode::LUS_KB_F11));
+        Ship::Context::GetRawInstance()->GetHostConfig()->GetInt("Shortcuts.Fullscreen", Ship::KbScancode::LUS_KB_F11));
     Ship::Context::GetRawInstance()->GetWindow()->SetMouseCaptureScancode(
-        Ship::Context::GetRawInstance()->GetConfig()->GetInt("Shortcuts.MouseCapture", Ship::KbScancode::LUS_KB_F2));
+        Ship::Context::GetRawInstance()->GetHostConfig()->GetInt("Shortcuts.MouseCapture", Ship::KbScancode::LUS_KB_F2));
 
     InitWindowManager();
     mGfxDebugger = std::make_shared<GfxDebugger>();
@@ -336,6 +339,10 @@ bool Fast3dWindow::IsRunning() {
     return mWindowManagerApi->IsRunning();
 }
 
+void Fast3dWindow::SetIsRunning(bool running) {
+    mWindowManagerApi->SetIsRunning(running);
+}
+
 uintptr_t Fast3dWindow::GetGfxFrameBuffer() {
     return mInterpreter->mGfxFrameBuffer;
 }
@@ -386,7 +393,7 @@ void Fast3dWindow::OnFullscreenChanged(bool isNowFullscreen) {
     std::shared_ptr<Window> wnd = Ship::Context::GetRawInstance()->GetWindow();
 
     // Re-save fullscreen enabled after
-    Ship::Context::GetRawInstance()->GetConfig()->SetBool("Window.Fullscreen.Enabled", isNowFullscreen);
+    Ship::Context::GetRawInstance()->GetHostConfig()->SetBool("Window.Fullscreen.Enabled", isNowFullscreen);
 }
 
 std::weak_ptr<Interpreter> Fast3dWindow::GetInterpreterWeak() const {
@@ -421,7 +428,7 @@ void Fast3dWindow::SetCurrentDimensions(bool isFullscreen, uint32_t width, uint3
 
 void Fast3dWindow::SetCurrentDimensions(bool isFullscreen, uint32_t width, uint32_t height, int32_t posX,
                                         int32_t posY) {
-    auto config = Ship::Context::GetRawInstance()->GetConfig();
+    auto config = Ship::Context::GetRawInstance()->GetHostConfig();
     if (!isFullscreen) {
         config->SetInt("Window.Width", static_cast<int32_t>(width));
         config->SetInt("Window.Height", static_cast<int32_t>(height));

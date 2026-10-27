@@ -41,6 +41,11 @@ class GfxWindowBackend {
     virtual void Destroy() = 0;
     virtual bool IsFullscreen() = 0;
 
+    // Re-arms a backend that one game closed so the next game sharing the window can run its loop.
+    void SetIsRunning(bool running) {
+        mIsRunning = running;
+    }
+
   protected:
     void (*mOnFullscreenChanged)(bool isNowFullscreen);
     bool (*mOnKeyDown)(int scancode);

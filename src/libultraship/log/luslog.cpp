@@ -9,7 +9,10 @@ void luslog(const char* file, int32_t line, int32_t logLevel, const char* msg) {
     spdlog::level::level_enum lvl = (spdlog::level::level_enum)logLevel;
     auto loc = spdlog::source_loc{ file, line, SPDLOG_FUNCTION };
 
-    spdlog::default_logger_raw()->log(loc, lvl, str);
+    // The default logger is gone after spdlog::shutdown in ~Context or the CrashHandler.
+    if (auto* logger = spdlog::default_logger_raw()) {
+        logger->log(loc, lvl, str);
+    }
 }
 
 void lusprintf(const char* file, int32_t line, int32_t logLevel, const char* fmt, ...) {

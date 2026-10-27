@@ -37,7 +37,7 @@ bool CrashHandler::CheckStrLen(const char* str) {
 }
 
 void CrashHandler::AppendStrTrunc(const char* str) {
-    while (mOutBuffersize < gMaxBufferSize - 1) {
+    while (*str != '\0' && mOutBuffersize < gMaxBufferSize - 1) {
         mOutBuffer[mOutBuffersize++] = *str++;
     }
     mOutBuffer[mOutBuffersize] = '\0';
@@ -56,7 +56,10 @@ void CrashHandler::AppendStr(const char* str) {
 
 void CrashHandler::AppendLine(const char* str) {
     AppendStr(str);
-    mOutBuffer[mOutBuffersize++] = '\n';
+    if (mOutBuffersize < gMaxBufferSize - 1) {
+        mOutBuffer[mOutBuffersize++] = '\n';
+    }
+    mOutBuffer[mOutBuffersize] = '\0';
 }
 
 /**

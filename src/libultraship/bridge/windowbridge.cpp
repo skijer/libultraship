@@ -31,4 +31,8 @@ int32_t WindowGetPosY() {
 bool WindowIsFullscreen() {
     return Ship::Context::GetRawInstance()->GetWindow()->IsFullscreen();
 }
+
+void WindowClose() {
+    Ship::Context::GetRawInstance()->GetWindow()->Close();
+}
 }

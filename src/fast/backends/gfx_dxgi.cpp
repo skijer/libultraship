@@ -164,7 +164,7 @@ void GfxWindowBackendDXGI::ToggleBorderlessWindowFullScreen(bool enable, bool ca
             ShowWindow(h_wnd, SW_MAXIMIZE);
         } else {
             std::tuple<HMONITOR, RECT, BOOL> Monitor;
-            auto conf = Ship::Context::GetRawInstance()->GetConfig();
+            auto conf = Ship::Context::GetRawInstance()->GetHostConfig();
             current_width = conf->GetInt("Window.Width", 640);
             current_height = conf->GetInt("Window.Height", 480);
             mPosX = conf->GetInt("Window.PositionX", 100);
@@ -493,7 +493,10 @@ static LRESULT CALLBACK gfx_dxgi_wnd_proc(HWND h_wnd, UINT message, WPARAM w_par
             break;
         case WM_DROPFILES:
             DragQueryFileA((HDROP)w_param, 0, fileName, 256);
-            Ship::Context::GetRawInstance()->GetFileDropMgr()->SetDroppedFile(fileName);
+            // A drop can arrive before the game created its FileDropMgr (window-only boot).
+            if (auto fileDropMgr = Ship::Context::GetRawInstance()->GetFileDropMgr()) {
+                fileDropMgr->SetDroppedFile(fileName);
+            }
             break;
         case WM_DISPLAYCHANGE:
             self->monitor_list = GetMonitorList();

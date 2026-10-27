@@ -108,6 +108,12 @@ void GfxRenderingAPIMetal::NewFrame() {
     ImGui_ImplMetal_NewFrame(current_render_pass);
 }
 
+// CreateFontsTexture is the only route that rebuilds an atlas left unbuilt by a late AddFont.
+void GfxRenderingAPIMetal::RebuildFontsTexture() {
+    ImGui_ImplMetal_DestroyFontsTexture();
+    ImGui_ImplMetal_CreateFontsTexture(mDevice);
+}
+
 void GfxRenderingAPIMetal::SetupFloatingFrame() {
     // We need the descriptor for the main framebuffer and to clear the existing depth attachment
     // so that we can set ImGui up again for our floating windows. Helps avoid Metal API validation issues.

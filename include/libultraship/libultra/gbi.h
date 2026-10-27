@@ -168,6 +168,8 @@
 #define G_DL_OTR_FILEPATH 0x27
 #define G_PUSHCD 0x28
 #define G_MTX_OTR_FILEPATH 0x29
+#define G_COMBO_RM_PUSH 0x2a
+#define G_COMBO_RM_POP 0x2b
 #define G_DL_OTR_HASH 0x31
 #define G_VTX_OTR_HASH 0x32
 #define G_MARKER 0x33
@@ -260,6 +262,8 @@
 
 /* macros for command parsing: */
 #define GDMACMD(x) (x)
+// fast/lus_gbi.h also defines GIMMCMD (C4005 when it is included first).
+#undef GIMMCMD
 #define GIMMCMD(x) (G_IMMFIRST - (x))
 #define GRDPCMD(x) (0xff - (x))
 
@@ -2886,6 +2890,30 @@ typedef union Gfx {
                                                       \
         _g0->words.w0 = _SHIFTL(G_POP_SHADER, 24, 8); \
     }
+
+// Draws the raw Gfx* span up to gSPComboRMPop with another game's resources (e.g. skeleton limbs).
+// gameStr is read by pointer, so it must outlive the frame: use a literal such as "mm".
+#define gSPComboRMPush(pkt, gameStr)                       \
+    {                                                      \
+        Gfx* _g0 = (Gfx*)(pkt);                            \
+                                                           \
+        _g0->words.w0 = _SHIFTL(G_COMBO_RM_PUSH, 24, 8);   \
+        _g0->words.w1 = (uintptr_t)(gameStr);              \
+    }
+
+#define gsSPComboRMPush(gameStr) \
+    { (_SHIFTL(G_COMBO_RM_PUSH, 24, 8)), (uintptr_t)(gameStr) }
+
+#define gSPComboRMPop(pkt)                              \
+    {                                                   \
+        Gfx* _g0 = (Gfx*)(pkt);                         \
+                                                        \
+        _g0->words.w0 = _SHIFTL(G_COMBO_RM_POP, 24, 8); \
+        _g0->words.w1 = 0;                              \
+    }
+
+#define gsSPComboRMPop() \
+    { (_SHIFTL(G_COMBO_RM_POP, 24, 8)), 0 }
 
 #define gSPExtraGeometryMode(pkt, c, s)                                                 \
     _DW({                                                                               \

@@ -7,8 +7,10 @@
 #include <unordered_map>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Ship {
+class Config;
 
 /** @brief Discriminator tag for the active field of the CVar union. */
 typedef enum class ConsoleVariableType { Integer, Float, String, Color, Color24 } ConsoleVariableType;
@@ -46,12 +48,26 @@ typedef struct CVar {
  * from a JSON file via the Config layer. Values can be registered with defaults,
  * queried, mutated, copied, and cleared at runtime.
  *
- * Obtain the singleton instance from Context::GetConsoleVariables().
+ * Obtain the instance of the running game from Context::GetConsoleVariables().
  */
 class ConsoleVariable {
   public:
+    /** @brief Store backed by the Context's Config. */
     ConsoleVariable();
+    /** @brief Store backed by its own Config, e.g. one game's settings file in a shared Context. */
+    explicit ConsoleVariable(std::shared_ptr<Config> config);
     ~ConsoleVariable();
+
+    /**
+     * @brief Routes every CVar named in `keys` (or nested under one, "key.child") to `host`.
+     *
+     * Lets a game store keep its own settings while engine-wide ones, such as the window or
+     * renderer, live once in the host store.
+     */
+    void DelegateToHost(std::shared_ptr<ConsoleVariable> host, std::vector<std::string> keys);
+
+    /** @brief The CVars libultraship itself reads: renderer, window, controllers and engine windows. */
+    static const std::vector<std::string>& GetEngineKeys();
 
     /**
      * @brief Returns the raw CVar entry for the given name, or nullptr if not found.
@@ -196,6 +212,12 @@ class ConsoleVariable {
     void LoadLegacy();
 
   private:
+    ConsoleVariable* GetHostFor(std::string_view name) const;
+
+    std::shared_ptr<Config> mConfig;
+    std::shared_ptr<ConsoleVariable> mHost;
+    std::vector<std::string> mHostKeys;
+
     struct TransparentStringHash {
         using is_transparent = void;
         size_t operator()(std::string_view sv) const noexcept {

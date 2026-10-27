@@ -10,6 +10,7 @@ endif()
 option(NON_PORTABLE "Build a non-portable version" OFF)
 option(DISABLE_DLL_LOADER "Disable dynamic library loading support" OFF)
 option(ENABLE_SCRIPTING "Enable TCC-based C mod compilation and scripting system" OFF)
+option(LUS_BUILD_SHARED "Build libultraship as a shared library so several games can share one instance" OFF)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     option(SIGN_LIBRARY "Enable xcode signing" OFF)
@@ -26,7 +27,12 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
 endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
-	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+	# A shared LUS hands C++ objects across modules, so every module must share one CRT heap.
+	if(LUS_BUILD_SHARED)
+		set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+	else()
+		set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+	endif()
 	# Default to embedded debug info (/Z7) so sccache can cache object files
 	# without multiple CL.EXE processes racing over a shared .pdb file.
 	if(POLICY CMP0141)

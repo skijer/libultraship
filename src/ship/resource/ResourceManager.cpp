@@ -104,8 +104,19 @@ std::shared_ptr<File> ResourceManager::LoadFileProcess(const ResourceIdentifier&
     return file;
 }
 
+GameServices* ResourceManager::GetGameToLoadAs() const {
+    GameServices* current = GameRegistry::GetCurrent();
+    if (current == nullptr || current->Resources.get() == this) {
+        return current;
+    }
+    return GameRegistry::FindByResources(this);
+}
+
 std::shared_ptr<IResource> ResourceManager::LoadResourceProcess(const ResourceIdentifier& identifier, bool loadExact,
                                                                 std::shared_ptr<ResourceInitData> initData) {
+    // A cross-game load runs as the owning game, so factories reach this manager through the Context.
+    GameScope ownerScope(GetGameToLoadAs());
+
     // Check for and remove the OTR signature
     if (OtrSignatureCheck(identifier.Path.c_str())) {
         const auto newFilePath = identifier.Path.substr(7);

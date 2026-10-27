@@ -15,6 +15,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <list>
 #include <stack>
@@ -35,6 +36,7 @@
 
 #include "ship/window/gui/Gui.h"
 #include "ship/resource/ResourceManager.h"
+#include "ship/resource/CrossRMRegistry.h"
 #include "ship/utils/Utils.h"
 #include "ship/Context.h"
 #include "ship/config/ConsoleVariable.h"
@@ -110,6 +112,27 @@ static std::string GetPathWithoutFileName(char* filePath) {
     }
 
     return filePath;
+}
+
+// "__OTR__@<game>:<path>" draws a DL, and everything it references, from another game's archives,
+// which reuse the same paths. Each entry lives until the exec stack unwinds below execDepthAtPush.
+struct CrossRMOverride {
+    std::shared_ptr<Ship::ResourceManager> rm;
+    size_t execDepthAtPush;
+};
+static std::vector<CrossRMOverride> g_crossRMStack;
+
+// G_COMBO_RM_PUSH/POP brackets route raw Gfx* spans (skeleton limbs) that carry no path marker;
+// only POP removes them. Assumes they are pushed at top level by game code, never inside resources.
+static constexpr size_t kBracketSentinel = SIZE_MAX;
+// PUSHes skipped for an unknown game, so their POPs do not remove a real entry.
+static int g_skippedBracketPushes = 0;
+
+static std::shared_ptr<Ship::ResourceManager> ActiveResMgr() {
+    if (!g_crossRMStack.empty()) {
+        return g_crossRMStack.back().rm;
+    }
+    return Ship::Context::GetRawInstance()->GetResourceManager();
 }
 
 constexpr size_t MAX_TRI_BUFFER = 256;
@@ -463,13 +486,13 @@ std::shared_ptr<Ship::IResource> Interpreter::ResolveResourceCached(const char* 
         return nullptr;
     }
     if (!mResolvedResourceCacheEnabled) {
-        return Ship::Context::GetRawInstance()->GetResourceManager()->LoadResourceProcess(path);
+        return ActiveResMgr()->LoadResourceProcess(path);
     }
     auto it = mResolvedResourceCache.find(path);
     if (it != mResolvedResourceCache.end()) {
         return it->second;
     }
-    auto res = Ship::Context::GetRawInstance()->GetResourceManager()->LoadResourceProcess(path);
+    auto res = ActiveResMgr()->LoadResourceProcess(path);
     // Only memoize a hit. The resource manager caches its own misses, so re-asking
     // for one is cheap, and CacheExternalResource can turn a path that missed into a
     // valid resource at runtime. A memoized null would outlive the resource itself.
@@ -995,7 +1018,11 @@ void Interpreter::ImportTextureCi4(int tile, bool importReplacement) {
     const uint8_t* palette;
 
     if (mRdp->palettes[palIdx / 8] == nullptr) {
-        SPDLOG_WARN("CI4: null palette slot {} for palIdx={}", palIdx / 8, palIdx);
+        // As in the CI8 path: a silent return leaves a stale GPU texture. Log once per address.
+        static std::unordered_set<const void*> sReportedNullPalettes4;
+        if (sReportedNullPalettes4.insert((const void*)addr).second) {
+            SPDLOG_ERROR("CI4: null palette slot {} for palIdx={}", palIdx / 8, palIdx);
+        }
         return;
     }
     palette = mRdp->palettes[palIdx / 8] + (palIdx % 8) * 16 * 2;
@@ -1081,8 +1108,13 @@ void Interpreter::ImportTextureCi8(int tile, bool importReplacement) {
     uint32_t lineSizeBytes = mRdp->loaded_texture[mRdp->texture_tile[tile].tmem_index].line_size_bytes;
 
     if (mRdp->palettes[0] == nullptr || mRdp->palettes[1] == nullptr) {
-        SPDLOG_WARN("CI8: null palette (pal0={}, pal1={})", static_cast<const void*>(mRdp->palettes[0]),
-                    static_cast<const void*>(mRdp->palettes[1]));
+        // Returning here leaves the GPU texture holding whatever was in it — visible as noise on an
+        // otherwise correct model, so say so loudly (once per address, this runs per frame).
+        static std::unordered_set<const void*> sReportedNullPalettes;
+        if (sReportedNullPalettes.insert((const void*)addr).second) {
+            SPDLOG_ERROR("CI8: null palette (pal0={}, pal1={})", static_cast<const void*>(mRdp->palettes[0]),
+                         static_cast<const void*>(mRdp->palettes[1]));
+        }
         return;
     }
 
@@ -3215,7 +3247,7 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
 
     if ((bool)gfx_check_image_signature((char*)data)) {
         std::shared_ptr<Fast::Texture> tex = std::static_pointer_cast<Fast::Texture>(
-            Ship::Context::GetRawInstance()->GetResourceManager()->LoadResourceProcess((char*)data));
+            ActiveResMgr()->LoadResourceProcess((char*)data));
         texFlags = tex->Flags;
         rawTexMetadata.width = tex->Width;
         rawTexMetadata.height = tex->Height;
@@ -3252,7 +3284,7 @@ void Interpreter::Gfxs2dexBg1cyc(F3DuObjBg* bg) {
 
     if ((bool)gfx_check_image_signature((char*)data)) {
         std::shared_ptr<Fast::Texture> tex = std::static_pointer_cast<Fast::Texture>(
-            Ship::Context::GetRawInstance()->GetResourceManager()->LoadResourceProcess((char*)data));
+            ActiveResMgr()->LoadResourceProcess((char*)data));
         texFlags = tex->Flags;
         rawTexMetadata.width = tex->Width;
         rawTexMetadata.height = tex->Height;
@@ -3358,12 +3390,17 @@ void GfxExecStack::start(F3DGfx* dlist) {
     gfx_path.clear();
     cmd_stack.push(dlist);
     disp_stack.clear();
+    // A run never inherits routes left unpopped by the previous one.
+    g_crossRMStack.clear();
+    g_skippedBracketPushes = 0;
 }
 
 void GfxExecStack::stop() {
     while (!cmd_stack.empty())
         cmd_stack.pop();
     gfx_path.clear();
+    g_crossRMStack.clear();
+    g_skippedBracketPushes = 0;
 }
 
 F3DGfx*& GfxExecStack::currCmd() {
@@ -3491,7 +3528,7 @@ bool gfx_mtx_otr_filepath_handler_custom_f3dex2(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *cmd0;
     const char* fileName = (const char*)cmd->words.w1;
-    const int32_t* mtx = (const int32_t*)Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer(
+    const int32_t* mtx = (const int32_t*)ActiveResMgr()->GetResourceRawPointer(
         (const char*)fileName);
 
     if (mtx != NULL) {
@@ -3505,7 +3542,7 @@ bool gfx_mtx_otr_filepath_handler_custom_f3d(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *cmd0;
     const char* fileName = (const char*)cmd->words.w1;
-    const int32_t* mtx = (const int32_t*)Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer(
+    const int32_t* mtx = (const int32_t*)ActiveResMgr()->GetResourceRawPointer(
         (const char*)fileName);
 
     if (mtx != NULL) {
@@ -3529,7 +3566,7 @@ bool gfx_mtx_otr_handler_custom_f3dex2(F3DGfx** cmd0) {
 
     const uint64_t hash = ((uint64_t)cmd->words.w0 << 32) + cmd->words.w1;
     const int32_t* mtx =
-        (const int32_t*)Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer(hash);
+        (const int32_t*)ActiveResMgr()->GetResourceRawPointer(hash);
 
     if (mtx != NULL) {
         Interpreter* gfx = mInstance.lock().get();
@@ -3548,7 +3585,7 @@ bool gfx_mtx_otr_handler_custom_f3d(F3DGfx** cmd0) {
 
     const uint64_t hash = ((uint64_t)cmd->words.w0 << 32) + cmd->words.w1;
     const int32_t* mtx =
-        (const int32_t*)Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer(hash);
+        (const int32_t*)ActiveResMgr()->GetResourceRawPointer(hash);
     if (mtx != nullptr) {
         cmd--;
         gfx->GfxSpMatrix(C0(16, 8), mtx);
@@ -3615,10 +3652,9 @@ bool gfx_movemem_handler_otr(F3DGfx** cmd0) {
 
     if (ucode_handler_index == ucode_f3dex2) {
         gfx->GfxSpMovememF3dex2(index, offset,
-                                Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer(hash));
+                                ActiveResMgr()->GetResourceRawPointer(hash));
     } else {
-        auto light =
-            (Fast::LightEntry*)Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer(hash);
+        auto light = (Fast::LightEntry*)ActiveResMgr()->GetResourceRawPointer(hash);
         uintptr_t data = (uintptr_t)&light->Ambient;
         gfx->GfxSpMovememF3d(index, offset, (void*)(data + (hasOffset == 1 ? 0x8 : 0)));
     }
@@ -3761,7 +3797,7 @@ bool gfx_vtx_hash_handler_custom(F3DGfx** cmd0) {
         // The exported offset is a BYTE offset into the vertex resource. Its unit is that resource's own
         // on-disk record size (16 for vanilla v0, 22 for the s32 v1 form) - never sizeof(F3DVtx), which is
         // the padded runtime struct. Ask the resource rather than assuming.
-        auto resourceMgr = Ship::Context::GetRawInstance()->GetResourceManager();
+        auto resourceMgr = ActiveResMgr();
         auto res = resourceMgr->LoadResource(hash);
         F3DVtx* vtx = (F3DVtx*)resourceMgr->GetResourceRawPointer(res);
 
@@ -3796,7 +3832,7 @@ bool gfx_vtx_otr_filepath_handler_custom(F3DGfx** cmd0) {
     size_t vtxIdxOff = cmd->words.w1 >> 16;
     size_t vtxDataOff = cmd->words.w1 & 0xFFFF;
     F3DVtx* vtx =
-        (F3DVtx*)Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer((const char*)fileName);
+        (F3DVtx*)ActiveResMgr()->GetResourceRawPointer((const char*)fileName);
     vtx += vtxDataOff;
 
     gfx->GfxSpVertex(vtxCnt, vtxIdxOff, vtx);
@@ -3806,13 +3842,53 @@ bool gfx_vtx_otr_filepath_handler_custom(F3DGfx** cmd0) {
 bool gfx_dl_otr_filepath_handler_custom(F3DGfx** cmd0) {
     F3DGfx* cmd = *cmd0;
     char* fileName = (char*)cmd->words.w1;
-    F3DGfx* nDL =
-        (F3DGfx*)Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer((const char*)fileName);
+
+    std::shared_ptr<Ship::ResourceManager> routedRM = nullptr;
+    bool hasRouteMarker = false;
+    static constexpr char kOtrPrefix[] = "__OTR__";
+    if (strncmp(fileName, kOtrPrefix, sizeof(kOtrPrefix) - 1) == 0 && fileName[sizeof(kOtrPrefix) - 1] == '@') {
+        const char* gameStart = fileName + sizeof(kOtrPrefix); // past '@'
+        const char* colon = strchr(gameStart, ':');
+        if (colon != nullptr) {
+            hasRouteMarker = true;
+            std::string gameName(gameStart, colon - gameStart);
+            routedRM = Ship::CrossRMRegistry::Get(gameName);
+            if (routedRM != nullptr) {
+                // Interned: command words may be re-walked in later frames. One entry per routed path.
+                static std::unordered_set<std::string> sInternedStrippedPaths;
+                const std::string& stripped =
+                    *sInternedStrippedPaths.insert(std::string(kOtrPrefix) + (colon + 1)).first;
+                fileName = const_cast<char*>(stripped.c_str());
+            }
+        }
+    }
+
+    F3DGfx* nDL = (F3DGfx*)(routedRM != nullptr ? routedRM->GetResourceRawPointer((const char*)fileName)
+                                                : ActiveResMgr()->GetResourceRawPointer((const char*)fileName));
+
+    if (hasRouteMarker && nDL == nullptr) {
+        // A bad route is skipped instead of reaching the null-DL assert below.
+        static std::unordered_set<std::string> sReportedBadRoutes;
+        if (sReportedBadRoutes.insert((const char*)cmd->words.w1).second) {
+            SPDLOG_ERROR("G_DL_OTR_FILEPATH: routed DL '{}' failed to resolve ({}); skipping",
+                         (const char*)cmd->words.w1,
+                         routedRM == nullptr ? "no ResourceManager registered for that game" : "resource not found");
+        }
+        return false;
+    }
 
     if (C0(16, 1) == 0 && nDL != nullptr) {
+        if (routedRM != nullptr) {
+            // Depth BEFORE the call: while the routed DL runs, depth > this; once the exec stack
+            // unwinds back to/below it, the routed DL (and any DL it branched to) is done.
+            g_crossRMStack.push_back({ routedRM, g_exec_stack.cmd_stack.size() });
+        }
         g_exec_stack.call(*cmd0, nDL);
     } else {
         if (nDL != nullptr) {
+            if (routedRM != nullptr) {
+                g_crossRMStack.push_back({ routedRM, g_exec_stack.cmd_stack.size() });
+            }
             (*cmd0) = nDL;
             g_exec_stack.branch(cmd);
             return true; // shortcut cmd increment
@@ -3834,11 +3910,42 @@ bool gfx_modify_vtx_handler_f3dex2(F3DGfx** cmd0) {
     return false;
 }
 
+// A target still in the N64 segmented range means SegAddr found no bound segment, e.g. a
+// cross-game DL using a segment the drawing game never set. Executing it would run garbage.
+static bool IsUnresolvedSegmentTarget(const void* target) {
+    const uintptr_t address = (uintptr_t)target;
+    if (address == 0 || address > 0x0FFFFFFF) {
+        return address == 0;
+    }
+#ifdef _WIN32
+    // Low addresses can still be module-mapped memory on Windows.
+    HMODULE module = nullptr;
+    return !GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCSTR>(address), &module);
+#else
+    return true;
+#endif
+}
+
+static bool ShouldSkipDisplayList(const void* target, const char* handlerName) {
+    if (!IsUnresolvedSegmentTarget(target)) {
+        return false;
+    }
+    static std::unordered_set<uintptr_t> sReported;
+    if (sReported.insert((uintptr_t)target).second) {
+        SPDLOG_ERROR("{}: unresolved segment DL target {}; skipping", handlerName, target);
+    }
+    return true;
+}
+
 // F3D, F3DEX, and F3DEX2 do the same thing but F3DEX2 has its own opcode number
 bool gfx_dl_handler_common(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *cmd0;
     F3DGfx* subGFX = (F3DGfx*)gfx->SegAddr(cmd->words.w1);
+    if (ShouldSkipDisplayList(subGFX, "gfx_dl_handler_common")) {
+        return false;
+    }
     if (C0(16, 1) == 0) {
         // Push return address
         if (subGFX != nullptr) {
@@ -3860,7 +3967,7 @@ bool gfx_dl_otr_hash_handler_custom(F3DGfx** cmd0) {
 
         uint64_t hash = ((uint64_t)(*cmd0)->words.w0 << 32) + (*cmd0)->words.w1;
 
-        F3DGfx* gfx = (F3DGfx*)Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer(hash);
+        F3DGfx* gfx = (F3DGfx*)ActiveResMgr()->GetResourceRawPointer(hash);
 
         if (gfx != 0) {
             g_exec_stack.call(cmd, gfx);
@@ -3884,6 +3991,9 @@ bool gfx_dl_index_handler(F3DGfx** cmd0) {
     uintptr_t segAddr = (segNum << 24) | (index * sizeof(F3DGfx)) + 1;
 
     F3DGfx* subGFX = (F3DGfx*)gfx->SegAddr(segAddr);
+    if (ShouldSkipDisplayList(subGFX, "gfx_dl_index_handler")) {
+        return false;
+    }
     if (C0(16, 1) == 0) {
         // Push return address
         if (subGFX != nullptr) {
@@ -3903,6 +4013,40 @@ bool gfx_pushcd_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
+// w1 is an interned game name ("mm"); routes raw Gfx* submissions until the matching POP.
+bool gfx_combo_rm_push_handler_custom(F3DGfx** cmd0) {
+    const char* gameName = (const char*)(*cmd0)->words.w1;
+    std::shared_ptr<Ship::ResourceManager> rm = Ship::CrossRMRegistry::Get(gameName);
+    if (rm != nullptr) {
+        g_crossRMStack.push_back({ rm, kBracketSentinel });
+    } else {
+        // Unknown game: push nothing but count the skip so the matching POP stays balanced.
+        static std::unordered_set<std::string> sReportedBadBracketGames;
+        if (sReportedBadBracketGames.insert(gameName).second) {
+            SPDLOG_ERROR("G_COMBO_RM_PUSH: no ResourceManager registered for game '{}'; ignoring bracket", gameName);
+        }
+        g_skippedBracketPushes++;
+    }
+    return false;
+}
+
+bool gfx_combo_rm_pop_handler_custom(F3DGfx** cmd0) {
+    if (g_skippedBracketPushes > 0) {
+        g_skippedBracketPushes--;
+        return false;
+    }
+    if (!g_crossRMStack.empty() && g_crossRMStack.back().execDepthAtPush == kBracketSentinel) {
+        g_crossRMStack.pop_back();
+        return false;
+    }
+    static bool sReportedUnbalancedPop = false;
+    if (!sReportedUnbalancedPop) {
+        sReportedUnbalancedPop = true;
+        SPDLOG_ERROR("unbalanced G_COMBO_RM_POP (no bracket entry on the cross-RM stack); ignoring");
+    }
+    return false;
+}
+
 // TODO handle special OTR opcodes later...
 bool gfx_branch_z_otr_handler_f3dex2(F3DGfx** cmd0) {
     // Push return address
@@ -3918,7 +4062,7 @@ bool gfx_branch_z_otr_handler_f3dex2(F3DGfx** cmd0) {
         (gfx->mRsp->extra_geometry_mode & G_EX_ALWAYS_EXECUTE_BRANCH) != 0) {
         uint64_t hash = ((uint64_t)(*cmd0)->words.w0 << 32) + (*cmd0)->words.w1;
 
-        F3DGfx* gfx = (F3DGfx*)Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer(hash);
+        F3DGfx* gfx = (F3DGfx*)ActiveResMgr()->GetResourceRawPointer(hash);
 
         if (gfx != 0) {
             (*cmd0) = gfx;
@@ -3934,6 +4078,12 @@ bool gfx_end_dl_handler_common(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     gfx->mMarkerOn = false;
     g_exec_stack.ret();
+    // Pop every route whose DL returned (ret() can unwind several slots), stopping at a bracket:
+    // routed entries always sit above brackets, which only POP removes.
+    while (!g_crossRMStack.empty() && g_crossRMStack.back().execDepthAtPush != kBracketSentinel &&
+           g_exec_stack.cmd_stack.size() <= g_crossRMStack.back().execDepthAtPush) {
+        g_crossRMStack.pop_back();
+    }
     return true;
 }
 
@@ -4128,8 +4278,8 @@ bool gfx_set_timg_handler_rdp(F3DGfx** cmd0) {
 
     if ((i & 1) != 1) {
         if (gfx_check_image_signature(imgData) == 1) {
-            std::shared_ptr<Fast::Texture> tex =
-                std::static_pointer_cast<Fast::Texture>(gfx->ResolveResourceCached(imgData));
+            std::shared_ptr<Fast::Texture> tex = std::static_pointer_cast<Fast::Texture>(
+                ActiveResMgr()->LoadResourceProcess(imgData));
 
             if (tex == nullptr) {
                 (*cmd0)++;
@@ -4161,8 +4311,7 @@ bool gfx_set_timg_otr_hash_handler_custom(F3DGfx** cmd0) {
     (*cmd0)++;
     uint64_t hash = ((uint64_t)(*cmd0)->words.w0 << 32) + (uint64_t)(*cmd0)->words.w1;
 
-    const char* fileName =
-        Ship::Context::GetRawInstance()->GetResourceManager()->GetArchiveManager()->HashToCString(hash);
+    const char* fileName = ActiveResMgr()->GetArchiveManager()->HashToCString(hash);
     uint32_t texFlags = 0;
     RawTexMetadata rawTexMetadata = {};
 
@@ -4171,9 +4320,8 @@ bool gfx_set_timg_otr_hash_handler_custom(F3DGfx** cmd0) {
         return false;
     }
 
-    std::shared_ptr<Fast::Texture> texture = std::static_pointer_cast<Fast::Texture>(
-        Ship::Context::GetRawInstance()->GetResourceManager()->LoadResourceProcess(
-            Ship::Context::GetRawInstance()->GetResourceManager()->GetArchiveManager()->HashToCString(hash)));
+    std::shared_ptr<Fast::Texture> texture =
+        std::static_pointer_cast<Fast::Texture>(ActiveResMgr()->LoadResourceProcess(fileName));
     if (texture != nullptr) {
         texFlags = texture->Flags;
         rawTexMetadata.width = texture->Width;
@@ -4213,7 +4361,11 @@ bool gfx_set_timg_otr_hash_handler_custom(F3DGfx** cmd0) {
             gfx->GfxDpSetTextureImage(fmt, size, width, fileName, texFlags, rawTexMetadata, tex);
         }
     } else {
-        SPDLOG_ERROR("G_SETTIMG_OTR_HASH: Texture is null");
+        // Logged once per path: this runs every frame the model is drawn.
+        static std::unordered_set<std::string> sReportedNullTextures;
+        if (sReportedNullTextures.insert(fileName).second) {
+            SPDLOG_ERROR("G_SETTIMG_OTR_HASH: Texture is null ({})", fileName);
+        }
     }
 
     (*cmd0)++;
@@ -4228,7 +4380,7 @@ bool gfx_set_timg_otr_filepath_handler_custom(F3DGfx** cmd0) {
     RawTexMetadata rawTexMetadata = {};
 
     std::shared_ptr<Fast::Texture> texture = std::static_pointer_cast<Fast::Texture>(
-        Ship::Context::GetRawInstance()->GetResourceManager()->LoadResourceProcess(fileName));
+        ActiveResMgr()->LoadResourceProcess(fileName));
     if (texture != nullptr) {
         Interpreter* gfx = mInstance.lock().get();
         texFlags = texture->Flags;
@@ -4886,6 +5038,9 @@ static constexpr UcodeHandler otrHandlers = {
     { OTR_G_PUSHCD, { "G_PUSHCD", gfx_pushcd_handler_custom } },                            // G_PUSHCD (0x28)
     { OTR_G_MTX_OTR_FILEPATH,
       { "G_MTX_OTR_FILEPATH", gfx_mtx_otr_filepath_handler_custom } },          // G_MTX_OTR_FILEPATH (0x29)
+    { OTR_G_COMBO_RM_PUSH,
+      { "G_COMBO_RM_PUSH", gfx_combo_rm_push_handler_custom } },                // G_COMBO_RM_PUSH (0x2a)
+    { OTR_G_COMBO_RM_POP, { "G_COMBO_RM_POP", gfx_combo_rm_pop_handler_custom } }, // G_COMBO_RM_POP (0x2b)
     { OTR_G_DL_OTR_HASH, { "G_DL_OTR_HASH", gfx_dl_otr_hash_handler_custom } }, // G_DL_OTR_HASH (0x31)
     { OTR_G_VTX_OTR_HASH, { "G_VTX_OTR_HASH", gfx_vtx_hash_handler_custom } },  // G_VTX_OTR_HASH (0x32)
     { OTR_G_MARKER, { "G_MARKER", gfx_marker_handler_otr } },                   // G_MARKER (0X33)
@@ -5078,7 +5233,8 @@ static void gfx_step() {
         // OTR filepath handlers expect w1 to be a valid string pointer.
         // Guard against null or N64-segment addresses that would crash in strlen/strncmp.
         if (opcode == OTR_G_VTX_OTR_FILEPATH || opcode == OTR_G_SETTIMG_OTR_FILEPATH ||
-            opcode == OTR_G_DL_OTR_FILEPATH || opcode == OTR_G_PUSHCD || opcode == OTR_G_MTX_OTR_FILEPATH) {
+            opcode == OTR_G_DL_OTR_FILEPATH || opcode == OTR_G_PUSHCD || opcode == OTR_G_MTX_OTR_FILEPATH ||
+            opcode == OTR_G_COMBO_RM_PUSH) {
             uintptr_t w1 = (uintptr_t)cmd->words.w1;
             if (w1 < 0x10000
 #if UINTPTR_MAX > 0xFFFFFFFFu
@@ -5531,7 +5687,7 @@ int32_t gfx_check_image_signature(const char* imgData) {
     }
 #endif
 
-    return Ship::Context::GetRawInstance()->GetResourceManager()->OtrSignatureCheck(imgData);
+    return ActiveResMgr()->OtrSignatureCheck(imgData);
 }
 
 void Interpreter::RegisterBlendedTexture(const char* name, uint8_t* mask, uint8_t* replacement) {
@@ -5541,7 +5697,7 @@ void Interpreter::RegisterBlendedTexture(const char* name, uint8_t* mask, uint8_
 
     if (gfx_check_image_signature(reinterpret_cast<char*>(replacement))) {
         Fast::Texture* tex = std::static_pointer_cast<Fast::Texture>(
-                                 Ship::Context::GetRawInstance()->GetResourceManager()->LoadResourceProcess(
+                                 ActiveResMgr()->LoadResourceProcess(
                                      reinterpret_cast<char*>(replacement)))
                                  .get();
 

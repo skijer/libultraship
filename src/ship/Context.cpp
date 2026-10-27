@@ -5,8 +5,10 @@
 #include <SDL2/SDL.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/null_sink.h>
 #include "ship/install_config.h"
 #include "ship/config/ConsoleVariable.h"
+#include "ship/GameRegistry.h"
 #include "ship/controller/controldeck/ControlDeck.h"
 #include "ship/debug/CrashHandler.h"
 #include "ship/window/FileDropMgr.h"
@@ -42,7 +44,10 @@ void Context::DestroyInstance() {
 
 Context::~Context() {
     SPDLOG_TRACE("destruct context");
-    GetWindow()->SaveWindowToConfig();
+    // A CreateUninitializedInstance() Context that never got Init*() has no Window or Config.
+    if (GetWindow() != nullptr) {
+        GetWindow()->SaveWindowToConfig();
+    }
     // Explicitly destructing everything so that logging is done last.
     mAudio = nullptr;
     mWindow = nullptr;
@@ -59,9 +64,18 @@ Context::~Context() {
     mScriptLoader = nullptr;
     mKeystore = nullptr;
 #endif
-    GetConfig()->Save();
+    if (mConfig != nullptr) {
+        mConfig->Save();
+    }
     mConfig = nullptr;
-    mLogger->flush();
+    if (mLogger != nullptr) {
+        mLogger->flush();
+    }
+    // Drop the spdlog registry while every game module is still mapped, then leave a null
+    // default logger so late SPDLOG_* calls from module static destructors stay safe.
+    spdlog::shutdown();
+    spdlog::set_default_logger(
+        std::make_shared<spdlog::logger>("null", std::make_shared<spdlog::sinks::null_sink_mt>()));
     mLogger = nullptr;
 #ifndef _DEBUG
     mLogThreadPool = nullptr;
@@ -202,13 +216,13 @@ bool Context::InitLogging(spdlog::level::level_enum debugBuildLogLevel,
 }
 
 bool Context::InitConfiguration() {
-    if (GetConfig() != nullptr) {
+    if (mConfig != nullptr) {
         return true;
     }
 
     mConfig = std::make_shared<Config>(GetPathRelativeToAppDirectory(mConfigFilePath));
 
-    if (GetConfig() == nullptr) {
+    if (mConfig == nullptr) {
         SPDLOG_ERROR("Failed to initialize config");
         return false;
     }
@@ -243,8 +257,7 @@ bool Context::InitResourceManager(const std::vector<std::string>& archivePaths,
 #endif
 
     mMainPath = GetConfig()->GetString("Game.Main Archive", GetAppDirectoryPath());
-    mPatchesPath = GetConfig()->GetString("Game.Patches Archive", GetAppDirectoryPath() + "/mods");
-    if (archivePaths.empty()) {
+    mPatchesPath = GetConfig()->GetString("Game.Patches Archive", GetAppDirectoryPath() + "/mods");    if (archivePaths.empty()) {
         std::vector<std::string> paths = std::vector<std::string>();
         paths.push_back(mMainPath);
         paths.push_back(mPatchesPath);
@@ -423,6 +436,10 @@ bool Context::InitKeystore() {
 #endif // ENABLE_SCRIPTING
 
 std::shared_ptr<ConsoleVariable> Context::GetConsoleVariables() const {
+    const GameServices* game = GameRegistry::GetCurrent();
+    if (game != nullptr && game->ConsoleVariables != nullptr) {
+        return game->ConsoleVariables;
+    }
     return mConsoleVariables;
 }
 
@@ -431,11 +448,28 @@ std::shared_ptr<spdlog::logger> Context::GetLogger() const {
 }
 
 std::shared_ptr<Config> Context::GetConfig() const {
+    const GameServices* game = GameRegistry::GetCurrent();
+    if (game != nullptr && game->Settings != nullptr) {
+        return game->Settings;
+    }
+    return mConfig;
+}
+
+std::shared_ptr<Config> Context::GetHostConfig() const {
     return mConfig;
 }
 
 std::shared_ptr<ResourceManager> Context::GetResourceManager() const {
+    const GameServices* game = GameRegistry::GetCurrent();
+    if (game != nullptr && game->Resources != nullptr) {
+        return game->Resources;
+    }
     return mResourceManager;
+}
+
+// The previous manager is not destroyed; its owner keeps it resident.
+void Context::SetResourceManager(std::shared_ptr<ResourceManager> resourceManager) {
+    mResourceManager = resourceManager;
 }
 
 std::shared_ptr<ControlDeck> Context::GetControlDeck() const {
@@ -548,6 +582,12 @@ std::string Context::GetAppBundlePath() {
 }
 
 std::string Context::GetAppDirectoryPath(const std::string& appName) {
+    // A game hosted in a shared Context keeps its files in its own install folder.
+    const GameServices* game = GameRegistry::GetCurrent();
+    if (game != nullptr && !game->AppDirectory.empty()) {
+        return game->AppDirectory;
+    }
+
 #if defined(__ANDROID__)
     const char* externaldir = SDL_AndroidGetExternalStoragePath();
     if (externaldir != NULL) {

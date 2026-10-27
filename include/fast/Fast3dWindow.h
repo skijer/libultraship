@@ -61,6 +61,7 @@ class Fast3dWindow : public Ship::Window {
     void SetFullscreen(bool isFullscreen) override;
     bool IsFullscreen() override;
     bool IsRunning() override;
+    void SetIsRunning(bool running);
     uintptr_t GetGfxFrameBuffer() override;
     const char* GetKeyName(int32_t scancode) override;
 

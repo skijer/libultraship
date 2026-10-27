@@ -10,6 +10,9 @@ extern "C" {
 /** @brief Returns true if the application window is running (has not been closed). */
 API_EXPORT bool WindowIsRunning();
 
+/** @brief Requests the application window to close. */
+API_EXPORT void WindowClose();
+
 /** @brief Returns the current width of the game window in pixels. */
 API_EXPORT uint32_t WindowGetWidth();
 
