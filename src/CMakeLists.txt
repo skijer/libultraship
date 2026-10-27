@@ -34,6 +34,12 @@ if(LUS_BUILD_SHARED AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
     target_link_options(libultraship PRIVATE "/DEF:${LUS_DEF_FILE}")
 endif()
 
+# Like the Windows export list: only libultraship's own code is exported, never its static dependencies,
+# whose copies in other modules (libgfxd, ImGui) would otherwise clash or interpose.
+if(LUS_BUILD_SHARED AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(libultraship PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
+
 set(INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 option(USE_OPENGLES "Enable GLES3" OFF)
 option(GFX_DEBUG_DISASSEMBLER "Enable libgfxd" OFF)

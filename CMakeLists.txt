@@ -11,6 +11,10 @@ option(NON_PORTABLE "Build a non-portable version" OFF)
 option(DISABLE_DLL_LOADER "Disable dynamic library loading support" OFF)
 option(ENABLE_SCRIPTING "Enable TCC-based C mod compilation and scripting system" OFF)
 option(LUS_BUILD_SHARED "Build libultraship as a shared library so several games can share one instance" OFF)
+# Static dependencies (StormLib, ImGui...) end up inside the shared library.
+if(LUS_BUILD_SHARED)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     option(SIGN_LIBRARY "Enable xcode signing" OFF)
