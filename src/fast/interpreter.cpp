@@ -3918,10 +3918,14 @@ static bool IsUnresolvedSegmentTarget(const void* target) {
         return address == 0;
     }
 #ifdef _WIN32
-    // Low addresses can still be module-mapped memory on Windows.
-    HMODULE module = nullptr;
-    return !GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                               reinterpret_cast<LPCSTR>(address), &module);
+    // Windows can place heap and module memory this low: only memory that is not readable is an unresolved segment.
+    MEMORY_BASIC_INFORMATION info;
+    if (VirtualQuery(target, &info, sizeof(info)) == 0 || info.State != MEM_COMMIT) {
+        return true;
+    }
+    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                           PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    return (info.Protect & readable) == 0 || (info.Protect & PAGE_GUARD) != 0;
 #else
     return true;
 #endif
