@@ -9,7 +9,7 @@
 #include <stdint.h>
 
 #define FLEET_GAME_API_MAJOR 1
-#define FLEET_GAME_API_MINOR 0
+#define FLEET_GAME_API_MINOR 1
 
 // Each game module exports this symbol; it is resolved per module handle, so the name is shared.
 #define FLEET_GET_GAME_API_SYMBOL "Fleet_GetGameApi"
@@ -100,6 +100,9 @@ typedef struct FleetGameApi {
     bool (*LoadSeed)(const char* seedJson);
 
     void (*FreeString)(char* text);
+
+    // 1.1: every other randomizer service, named by `op` with JSON in and out; NULL for an unknown op.
+    char* (*RandoRequest)(const char* op, const char* json);
 } FleetGameApi;
 
 typedef const FleetGameApi* (*FleetGetGameApiFn)(uint16_t major);
