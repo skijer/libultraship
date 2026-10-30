@@ -1,22 +1,20 @@
 #pragma once
 
 // Contract between Fleet and a game module (soh, 2ship) sharing one process and one libultraship.
-// Both tables are append-only: new fields go at the end and bump MINOR; anything else bumps MAJOR.
-// A field may be read only if structSize covers it; a NULL function is a service not offered yet.
+// Every service is a function looked up by name: Fleet asks a game through its exported Fleet_GetFunction, a game
+// asks Fleet through the lookup it receives in Attach. NULL means the service is not offered, so either side just
+// does without it; there is no contract version.
 
 #include <stdbool.h>
-#include <stddef.h>
 #include <stdint.h>
 
-#define FLEET_GAME_API_MAJOR 1
-#define FLEET_GAME_API_MINOR 2
-
-// Each game module exports this symbol; it is resolved per module handle, so the name is shared.
-#define FLEET_GET_GAME_API_SYMBOL "Fleet_GetGameApi"
+#define FLEET_GET_FUNCTION_SYMBOL "Fleet_GetFunction"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef void* (*FleetGetFunctionFn)(const char* name);
 
 typedef enum FleetLogLevel {
     FLEET_LOG_TRACE,
@@ -26,89 +24,53 @@ typedef enum FleetLogLevel {
     FLEET_LOG_ERROR,
 } FleetLogLevel;
 
-// Items cross games as keys: "oot:ITEM_HOOKSHOT", "mm:ITEM_POWDER_KEG", or a mod key like "nei.whip".
-typedef void (*FleetKeyVisitor)(void* userData, const char* key, int32_t count);
-
-// A switch target. `payloadJson` carries game-agnostic state for the arrival (may be NULL).
+// A switch target. `payloadJson` carries game-agnostic state for the arrival (may be NULL): "portal" names a
+// doorway both games know by name, so neither needs the other's entrance numbers, and "slot" the save slot.
 typedef struct FleetDestination {
     const char* game;
     uint32_t entrance;
     const char* payloadJson;
 } FleetDestination;
 
-// What Fleet offers to the games. Strings passed in are only valid during the call.
-typedef struct FleetHostApi {
-    uint32_t structSize;
-    uint16_t major;
-    uint16_t minor;
-
-    void (*Log)(const char* game, FleetLogLevel level, const char* message);
-
-    // Leaves the calling game at the end of its frame and continues in `destination`.
-    void (*RequestSwitch)(const char* fromGame, const FleetDestination* destination);
-    // Where a scene exit leads when entrances are shuffled across games. False: keep the vanilla exit.
-    bool (*ResolveExit)(const char* game, uint32_t exitEntrance, FleetDestination* destination);
-
-    // Feeds the item mapper; Fleet answers by calling GrantKey on the paired games.
-    void (*ReportObtained)(const char* game, const char* key, int32_t count);
-
-    // The single network connection, multiplexed by channel ("oot", "mm", "fleet").
-    void (*NetSend)(const char* game, const char* channel, const char* json);
-    // 1.2: the running game calls this between frames. Fleet may park the game here and run the other one; the
-    // call returns once this game is active again.
-    void (*FrameEnd)(const char* game);
-} FleetHostApi;
-
-// Everything a game needs to boot inside Fleet.
 typedef struct FleetAttachInfo {
-    uint32_t structSize;
-    const FleetHostApi* host;
+    FleetGetFunctionFn hostFunction;
     // The game's own install folder: its .o2r archives, mods/ and settings file live here.
     const char* installDirectory;
-    // Fleet owns saves: the game reads and writes its slots under this folder.
-    const char* saveDirectory;
 } FleetAttachInfo;
 
-// What a game offers to Fleet. Returned strings are owned by the game and released with FreeString.
-typedef struct FleetGameApi {
-    uint32_t structSize;
-    uint16_t major;
-    uint16_t minor;
-    // "oot" or "mm": the GameRegistry name and the "__OTR__@<name>:" route of this game.
-    const char* name;
+// Fleet's services. Strings passed in are only valid during the call.
 
-    // Lifecycle. Attach registers the game's GameServices, archives and mods without opening a window.
-    bool (*Attach)(const FleetAttachInfo* info);
-    // Runs the game loop until it requests a switch or the window closes.
-    void (*Run)(const FleetDestination* arrival);
-    void (*Detach)(void);
+// "Log"
+typedef void (*FleetLogFn)(const char* game, FleetLogLevel level, const char* message);
+// "RequestSwitch": leaves the calling game at its next FrameEnd and continues in `destination`.
+typedef void (*FleetRequestSwitchFn)(const char* fromGame, const FleetDestination* destination);
+// "FrameEnd": the running game calls this between frames. Fleet may park the game here and run the other one; the
+// call returns once this game is active again.
+typedef void (*FleetFrameEndFn)(const char* game);
 
-    // Saves.
-    bool (*LoadSlot)(int32_t slot);
-    bool (*SaveSlot)(int32_t slot);
+// A game's services. Returned strings are owned by the game and released with "FreeString".
 
-    // Inventory as keys. GrantKey must work while the game is not running (no play state).
-    void (*ListOwnedKeys)(FleetKeyVisitor visitor, void* userData);
-    bool (*GrantKey)(const char* key, int32_t count);
+// "Name": "oot" or "mm", the GameRegistry name and the "__OTR__@<name>:" route of this game.
+typedef const char* (*FleetNameFn)(void);
+// "Attach": registers the game with Fleet without opening anything; false if its install cannot boot.
+typedef bool (*FleetAttachFn)(const FleetAttachInfo* info);
+// "Run": runs the game loop until the window closes; switches park it inside FrameEnd.
+typedef void (*FleetRunFn)(const FleetDestination* arrival);
+// "Arrive": Fleet calls this just before resuming a parked game; the game enters `arrival` on its next frames.
+typedef void (*FleetArriveFn)(const FleetDestination* arrival);
+// "Detach"
+typedef void (*FleetDetachFn)(void);
+// "FreeString"
+typedef void (*FleetFreeStringFn)(char* text);
 
-    // Delivers a packet that arrived on this game's channel.
-    void (*NetReceive)(const char* channel, const char* json);
-
-    // Randomizer oracle; JSON in and out.
-    char* (*DumpRandoStaticData)(void);
-    void (*RandoReset)(void);
-    void (*RandoSetOwnedItems)(const char* itemsJson);
-    char* (*RandoGetReachableChecks)(void);
-    bool (*RandoPlaceItem)(const char* check, const char* item);
-    bool (*LoadSeed)(const char* seedJson);
-
-    void (*FreeString)(char* text);
-
-    // 1.1: every other randomizer service, named by `op` with JSON in and out; NULL for an unknown op.
-    char* (*RandoRequest)(const char* op, const char* json);
-} FleetGameApi;
-
-typedef const FleetGameApi* (*FleetGetGameApiFn)(uint16_t major);
+// Randomizer oracle, JSON in and out: "DumpRandoStaticData", "RandoReset", "RandoSetOwnedItems",
+// "RandoGetReachableChecks", "RandoPlaceItem", and "RandoRequest" for every other service, named by `op`.
+typedef char* (*FleetDumpRandoStaticDataFn)(void);
+typedef void (*FleetRandoResetFn)(void);
+typedef void (*FleetRandoSetOwnedItemsFn)(const char* itemsJson);
+typedef char* (*FleetRandoGetReachableChecksFn)(void);
+typedef bool (*FleetRandoPlaceItemFn)(const char* check, const char* item);
+typedef char* (*FleetRandoRequestFn)(const char* op, const char* json);
 
 #ifdef __cplusplus
 }
