@@ -9,7 +9,7 @@
 #include <stdint.h>
 
 #define FLEET_GAME_API_MAJOR 1
-#define FLEET_GAME_API_MINOR 1
+#define FLEET_GAME_API_MINOR 2
 
 // Each game module exports this symbol; it is resolved per module handle, so the name is shared.
 #define FLEET_GET_GAME_API_SYMBOL "Fleet_GetGameApi"
@@ -54,6 +54,9 @@ typedef struct FleetHostApi {
 
     // The single network connection, multiplexed by channel ("oot", "mm", "fleet").
     void (*NetSend)(const char* game, const char* channel, const char* json);
+    // 1.2: the running game calls this between frames. Fleet may park the game here and run the other one; the
+    // call returns once this game is active again.
+    void (*FrameEnd)(const char* game);
 } FleetHostApi;
 
 // Everything a game needs to boot inside Fleet.
