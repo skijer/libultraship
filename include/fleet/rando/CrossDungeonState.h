@@ -1,5 +1,6 @@
 #pragma once
 #include "CrossDungeonSeed.h"
+#include "CrossPassages.h"
 
 namespace ComboRando::CrossDungeon {
 class HostState {
@@ -8,11 +9,16 @@ class HostState {
     }
     int game;
     std::vector<Route> routes;
+    std::vector<Passage> passages;
     std::vector<Dungeon> dungeons;
     uint16_t logicalClears = 0;
     bool overworld = true;
     std::set<int32_t> arrivals;
 
+    // Routes or passages into the other game: the search then starts from the arrivals Fleet grants.
+    bool HasLinks() const {
+        return !routes.empty() || !passages.empty();
+    }
     void Install(const nlohmann::json& seed) {
         auto next = Decode(seed);
         std::vector<Dungeon> catalogue;
@@ -20,6 +26,7 @@ class HostState {
             for (const auto& entry : seed.at("dungeons"))
                 catalogue.push_back(ParseDungeon(entry));
         routes = std::move(next);
+        passages = DecodePassages(seed);
         dungeons = std::move(catalogue);
         logicalClears = 0;
         arrivals.clear();

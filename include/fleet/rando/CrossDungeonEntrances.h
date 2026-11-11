@@ -42,6 +42,8 @@ struct PoolOptions {
     bool dungeons = true, bosses = false, interiors = false, grottos = false, expanded = false;
     bool shops = false, doorInteriors = false;
     bool legacyInteriors = false; // Catalogue policy for exact replay of schema v1-v3 seeds.
+    // A dungeon's way out no longer leads back outside the door that led in.
+    bool decoupled = false;
     bool Any() const {
         return dungeons || bosses || interiors || grottos || shops || doorInteriors;
     }
@@ -133,11 +135,16 @@ inline void Validate(const std::vector<Dungeon>& dungeons) {
     }
 }
 
-inline std::vector<Route> FromPermutation(const std::vector<Dungeon>& dungeons,
-                                          const std::vector<size_t>& permutation) {
+// Where each dungeon's exit leads, by catalogue index; empty, or an entry left unset, keeps it coupled.
+using ExitDestinations = std::vector<std::optional<Endpoint>>;
+
+inline std::vector<Route> FromPermutation(const std::vector<Dungeon>& dungeons, const std::vector<size_t>& permutation,
+                                          const ExitDestinations& exitTo = {}) {
     Validate(dungeons);
     if (permutation.size() != dungeons.size())
         throw std::invalid_argument("cross-dungeon permutation size mismatch");
+    if (!exitTo.empty() && exitTo.size() != dungeons.size())
+        throw std::invalid_argument("cross-dungeon exit destinations size mismatch");
     std::set<size_t> seen;
     std::vector<Route> routes;
     for (size_t i = 0; i < dungeons.size(); ++i) {
@@ -148,10 +155,14 @@ inline std::vector<Route> FromPermutation(const std::vector<Dungeon>& dungeons,
         const auto& target = dungeons[permutation[i]];
         if (source.pool == Pool::Boss)
             continue;
+        const auto& decoupled = exitTo.empty() ? std::nullopt : exitTo[permutation[i]];
+        if (decoupled && (!Valid(*decoupled) || target.pool != Pool::Dungeon))
+            throw std::invalid_argument("invalid decoupled cross-dungeon exit");
+        const Endpoint destination = decoupled ? *decoupled : source.returnTo;
         routes.push_back({ Phase::AfterNative, source.entrance, target.entrance, target.id });
-        routes.push_back({ Phase::BeforeNative, target.exit, source.returnTo, source.id });
+        routes.push_back({ Phase::BeforeNative, target.exit, destination, source.id });
         for (auto escape : target.escapeExits)
-            routes.push_back({ Phase::BeforeNative, escape, source.returnTo, source.id });
+            routes.push_back({ Phase::BeforeNative, escape, destination, source.id });
     }
     const auto nonboss = routes;
     std::set<Endpoint> bossEscapes;

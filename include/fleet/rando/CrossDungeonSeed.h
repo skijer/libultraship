@@ -7,7 +7,7 @@ inline nlohmann::json OptionsJson(const PoolOptions& p) {
     nlohmann::json options = { { "dungeons", p.dungeons },          { "bosses", p.bosses },
                                { "interiors", p.interiors },        { "grottos", p.grottos },
                                { "expanded", p.expanded },          { "shops", p.shops },
-                               { "doorInteriors", p.doorInteriors } };
+                               { "doorInteriors", p.doorInteriors }, { "decoupled", p.decoupled } };
     if (p.legacyInteriors)
         options["legacyInteriors"] = true;
     return options;
@@ -32,6 +32,7 @@ inline PoolOptions ParseOptions(const nlohmann::json& j) {
     p.shops = flag("shops", false);
     p.doorInteriors = flag("doorInteriors", false);
     p.legacyInteriors = flag("legacyInteriors", false);
+    p.decoupled = flag("decoupled", false);
     return p;
 }
 inline PoolOptions OptionsFromSeed(const nlohmann::json& seed) {
@@ -130,8 +131,9 @@ inline Dungeon ParseDungeon(const nlohmann::json& j) {
         d.deathCheckpoint = ParseEndpoint(j.at("deathCheckpoint"));
     return d;
 }
-inline nlohmann::json Encode(const std::vector<Dungeon>& dungeons, const std::vector<size_t>& permutation) {
-    FromPermutation(dungeons, permutation); // Never persist a map that cannot be replayed.
+inline nlohmann::json Encode(const std::vector<Dungeon>& dungeons, const std::vector<size_t>& permutation,
+                             const ExitDestinations& exitTo = {}) {
+    FromPermutation(dungeons, permutation, exitTo); // Never persist a map that cannot be replayed.
     auto entries = nlohmann::json::array();
     for (const auto& d : dungeons)
         entries.push_back(DungeonJson(d));
@@ -140,6 +142,7 @@ inline nlohmann::json Encode(const std::vector<Dungeon>& dungeons, const std::ve
     };
     PoolOptions options;
     options.dungeons = false;
+    options.decoupled = !exitTo.empty();
     for (const auto& d : dungeons) {
         if (d.pool == Pool::Dungeon) {
             options.dungeons = true;
@@ -157,9 +160,15 @@ inline nlohmann::json Encode(const std::vector<Dungeon>& dungeons, const std::ve
             options.doorInteriors = true;
     }
     if (options.bosses || options.interiors || options.grottos || options.expanded || options.shops ||
-        options.doorInteriors) {
+        options.doorInteriors || options.decoupled) {
         result["version"] = 4;
         result["options"] = OptionsJson(options);
+    }
+    if (!exitTo.empty()) {
+        auto exits = nlohmann::json::array();
+        for (const auto& destination : exitTo)
+            exits.push_back(destination ? EndpointJson(*destination) : nlohmann::json());
+        result["exits"] = exits;
     }
     return result;
 }
@@ -196,7 +205,15 @@ inline std::vector<Route> Decode(const nlohmann::json& j) {
             throw std::invalid_argument("invalid cross-dungeon permutation index");
         permutation.push_back(n.get<size_t>());
     }
-    return FromPermutation(dungeons, permutation);
+    ExitDestinations exitTo;
+    if (j.contains("exits")) {
+        const auto& exits = j.at("exits");
+        if (!exits.is_array() || exits.size() != entries.size())
+            throw std::invalid_argument("invalid decoupled cross-dungeon exits");
+        for (const auto& e : exits)
+            exitTo.push_back(e.is_null() ? std::nullopt : std::optional<Endpoint>(ParseEndpoint(e)));
+    }
+    return FromPermutation(dungeons, permutation, exitTo);
 }
 inline nlohmann::json GenerateSeed(const std::vector<Dungeon>& dungeons, uint64_t seed) {
     auto routes = Generate(dungeons, seed, true);

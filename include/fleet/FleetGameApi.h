@@ -48,6 +48,25 @@ typedef void (*FleetRequestSwitchFn)(const char* fromGame, const FleetDestinatio
 // call returns once this game is active again.
 typedef void (*FleetFrameEndFn)(const char* game);
 
+// One of a game's own randomizer items, drawn by that game into the running game's frame. The heads and tails are
+// the running game's polyOpa/polyXlu arena pointers; the drawing game advances them. Both games share the MtxF layout.
+typedef struct FleetItemDraw {
+    const char* owner;
+    const char* item;
+    void* opaHead;
+    void* opaTail;
+    void* xluHead;
+    void* xluTail;
+    float model[16];
+    float billboard[16];
+    uint32_t frames;
+} FleetItemDraw;
+
+// "DrawForeignItem": forwards to the owner's "DrawItem"; false when the owner cannot draw `item` now.
+typedef bool (*FleetDrawForeignItemFn)(FleetItemDraw* request);
+// "ResetActiveGame": soft-resets the game being played, whichever game's reset command or button asked.
+typedef void (*FleetResetActiveGameFn)(void);
+
 // A game's services. Returned strings are owned by the game and released with "FreeString".
 
 // "Name": "oot" or "mm", the GameRegistry name and the "__OTR__@<name>:" route of this game.
@@ -62,6 +81,21 @@ typedef void (*FleetArriveFn)(const FleetDestination* arrival);
 typedef void (*FleetDetachFn)(void);
 // "FreeString"
 typedef void (*FleetFreeStringFn)(char* text);
+// "DrawItem": draws one of this game's items for another game, with this game's own code and archives.
+typedef bool (*FleetDrawItemFn)(FleetItemDraw* request);
+// "Reset": the game's own soft reset, back to its boot and title screens.
+typedef void (*FleetResetFn)(void);
+
+// An ImGui texture of the game's GUI, valid for the current frame, drawn over uv0..uv1 and tinted.
+typedef struct FleetItemIcon {
+    void* texture;
+    float uv0[2];
+    float uv1[2];
+    float tint[4];
+} FleetItemIcon;
+
+// "ItemIcon": the icon of one of this game's randomizer items, by its dump name; false when it has none.
+typedef bool (*FleetItemIconFn)(const char* item, FleetItemIcon* icon);
 
 // Randomizer oracle, JSON in and out: "DumpRandoStaticData", "RandoReset", "RandoSetOwnedItems",
 // "RandoGetReachableChecks", "RandoPlaceItem", and "RandoRequest" for every other service, named by `op`.
