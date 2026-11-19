@@ -421,7 +421,6 @@ class ResourceManager {
     std::shared_ptr<IResource> GetCachedResource(std::variant<ResourceLoadError, std::shared_ptr<IResource>> cacheLine);
 
   private:
-    /** @brief The game whose Context services this manager's loads must see from the calling thread. */
     GameServices* GetGameToLoadAs() const;
 
     std::unordered_map<ResourceIdentifier, std::variant<ResourceLoadError, std::shared_ptr<IResource>>,
@@ -431,10 +430,6 @@ class ResourceManager {
     std::shared_ptr<ArchiveManager> mArchiveManager;
     std::shared_ptr<BS::thread_pool> mThreadPool;
 
-    // SOH [WASM] Every resource load goes through here. Emscripten builds are
-    // single-threaded -- there is no pool to submit to -- so the task runs inline and is
-    // handed back as an already-satisfied future, which is what the async call sites
-    // expect. Loads become synchronous rather than unsupported.
     template <typename F> auto SubmitTask(F&& func, BS::priority_t priority = BS::pr::normal) {
 #ifdef __EMSCRIPTEN__
         (void)priority;
@@ -448,7 +443,6 @@ class ResourceManager {
         }
         return promise.get_future();
 #else
-        // Workers run as the game owning this manager, so nested Context lookups stay in that game.
         GameServices* owner = GameRegistry::FindByResources(this);
         return mThreadPool->submit_task(
             [owner, task = std::forward<F>(func)]() {

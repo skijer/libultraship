@@ -84,9 +84,6 @@ bool GfxRenderingAPIMetal::MetalInit(SDL_Renderer* renderer) {
     mReadbackQueue = mDevice->newCommandQueue();
 
     for (size_t i = 0; i < kMaxVertexBufferPoolSize; i++) {
-        // SOH [Enhancement] kInitialVertexBufferLength uses 40 floats/vertex (was a hardcoded 32) to match
-        // the CPU mBufVbo allocation, which gained headroom for the toon-lighting normal attribute. Grows
-        // on demand in StartFrame for scenes that need more (see the DrawTriangles overflow guard).
         MTL::Buffer* new_buffer = mDevice->newBuffer(kInitialVertexBufferLength, MTL::ResourceStorageModeShared);
         mVertexBufferPool[i] = new_buffer;
     }
@@ -108,7 +105,6 @@ void GfxRenderingAPIMetal::NewFrame() {
     ImGui_ImplMetal_NewFrame(current_render_pass);
 }
 
-// CreateFontsTexture is the only route that rebuilds an atlas left unbuilt by a late AddFont.
 void GfxRenderingAPIMetal::RebuildFontsTexture() {
     ImGui_ImplMetal_DestroyFontsTexture();
     ImGui_ImplMetal_CreateFontsTexture(mDevice);
@@ -279,7 +275,7 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shad
     prg->usedTextures[5] = cc_features.used_blend[1];
     prg->numInputs = cc_features.numInputs;
     prg->numFloats = numFloats;
-    prg->opt_toon = cc_features.opt_toon; // SOH [Enhancement] toon lighting
+    prg->opt_toon = cc_features.opt_toon;
 
     // Prepoluate pipeline state cache with program and available msaa levels
     for (int i = 0; i < ARRAY_COUNT(mMsaaNumQualityLevels); i++) {
@@ -508,12 +504,6 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
 
     MTL::Buffer* vertex_buffer = mVertexBufferPool[mCurrentVertexBufferPoolIndex];
 
-    // SOH [Enhancement] Guard the per-frame vertex buffer against overflow. Large scenes (e.g.
-    // Hyrule Field) — especially with toon lighting's extra per-vertex normal and the debug
-    // viewer's geometry — can exceed this frame's buffer. Rather than memcpy past the end (a
-    // SIGBUS in memmove), skip this batch and record how much room the frame actually wants so
-    // StartFrame can grow the pool to fit. The scene renders fully within kMaxVertexBufferPoolSize
-    // frames and can never crash.
     size_t vertex_data_size = sizeof(float) * buf_vbo_len;
     if (mCurrentVertexBufferOffset + vertex_data_size > vertex_buffer->length()) {
         mVertexBufferTargetLength =
@@ -556,8 +546,6 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
         }
     }
 
-    // SOH [Enhancement] Toon lighting: feed the per-object dominant light + frame-global ramp shape,
-    // both pushed in by the application (SetToonLighting / SetToonRamp). No config reads here.
     if (mShaderProgram->opt_toon) {
         for (int j = 0; j < 3; j++) {
             mDrawUniforms.toonLightDir[j] = mToonLightDir[j];
@@ -610,10 +598,7 @@ void GfxRenderingAPIMetal::StartFrame() {
 
     mCurrentVertexBufferOffset = 0;
 
-    // SOH [Enhancement] Grow this frame's vertex buffer if an earlier frame overflowed it (see
-    // the guard in DrawTriangles). Safe here: this pool slot was last used kMaxVertexBufferPoolSize
-    // frames ago, so the GPU has finished reading it. One slot grows per frame, so all slots reach
-    // the target within kMaxVertexBufferPoolSize frames, after which overflow can't recur.
+    // Safe to reallocate: the GPU finished with this slot kMaxVertexBufferPoolSize frames ago.
     MTL::Buffer*& vertex_buffer = mVertexBufferPool[mCurrentVertexBufferPoolIndex];
     if (vertex_buffer->length() < mVertexBufferTargetLength) {
         SPDLOG_INFO("Growing Metal vertex buffer from {} to {} bytes", vertex_buffer->length(),

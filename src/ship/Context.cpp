@@ -44,7 +44,6 @@ void Context::DestroyInstance() {
 
 Context::~Context() {
     SPDLOG_TRACE("destruct context");
-    // A CreateUninitializedInstance() Context that never got Init*() has no Window or Config.
     if (GetWindow() != nullptr) {
         GetWindow()->SaveWindowToConfig();
     }
@@ -71,8 +70,6 @@ Context::~Context() {
     if (mLogger != nullptr) {
         mLogger->flush();
     }
-    // Drop the spdlog registry while every game module is still mapped, then leave a null
-    // default logger so late SPDLOG_* calls from module static destructors stay safe.
     spdlog::shutdown();
     spdlog::set_default_logger(
         std::make_shared<spdlog::logger>("null", std::make_shared<spdlog::sinks::null_sink_mt>()));
@@ -140,8 +137,6 @@ bool Context::InitLogging(spdlog::level::level_enum debugBuildLogLevel,
     try {
         // Setup Logging
 #ifndef __EMSCRIPTEN__
-        // SOH [WASM] This pool backs the async logger below, and spawning its thread would
-        // abort in a build without pthreads. The wasm build logs synchronously.
         spdlog::init_thread_pool(8192, 1);
 #endif
         std::vector<spdlog::sink_ptr> sinks;
@@ -191,9 +186,6 @@ bool Context::InitLogging(spdlog::level::level_enum debugBuildLogLevel,
         GetLogger()->set_level(debugBuildLogLevel);
         GetLogger()->flush_on(spdlog::level::trace);
 #elif defined(__EMSCRIPTEN__)
-        // SOH [WASM] Synchronous, for the reason above. Note the async logger's overflow
-        // policy is `block`, which on a single thread would be a deadlock rather than a
-        // slowdown.
         mLogger = std::make_shared<spdlog::logger>(GetName(), sinks.begin(), sinks.end());
         GetLogger()->set_level(releaseBuildLogLevel);
         GetLogger()->flush_on(spdlog::level::info);
@@ -467,7 +459,6 @@ std::shared_ptr<ResourceManager> Context::GetResourceManager() const {
     return mResourceManager;
 }
 
-// The previous manager is not destroyed; its owner keeps it resident.
 void Context::SetResourceManager(std::shared_ptr<ResourceManager> resourceManager) {
     mResourceManager = resourceManager;
 }
@@ -582,7 +573,6 @@ std::string Context::GetAppBundlePath() {
 }
 
 std::string Context::GetAppDirectoryPath(const std::string& appName) {
-    // A game hosted in a shared Context keeps its files in its own install folder.
     const GameServices* game = GameRegistry::GetCurrent();
     if (game != nullptr && !game->AppDirectory.empty()) {
         return game->AppDirectory;

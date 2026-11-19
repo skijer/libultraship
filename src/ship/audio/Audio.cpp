@@ -44,8 +44,6 @@ void Audio::InitAudioPlayer() {
 
     if (mAudioPlayer && !mAudioPlayer->Init()) {
 #ifdef __EMSCRIPTEN__
-        // SOH [WASM] The Web Audio player needs AudioWorklet. A browser without it still has
-        // SDL's ScriptProcessorNode path, which plays, if not as smoothly.
         if (GetCurrentAudioBackend() == AudioBackend::WEBAUDIO) {
             FallBackToSdl("no AudioContext with AudioWorklet in this browser");
             return;
@@ -57,9 +55,6 @@ void Audio::InitAudioPlayer() {
     }
 }
 
-// SOH [WASM] Unlike SetCurrentAudioBackend this does not save the choice: the failure may be
-// one session's (a page whose CSP blocks blob: scripts, a browser refusing one more
-// AudioContext), and a saved "sdl" would keep every later session on the main-thread player.
 void Audio::FallBackToSdl(const char* why) {
     SPDLOG_WARN("Web Audio player unavailable ({}); falling back to SDL audio for this session", why);
     mAudioBackend = AudioBackend::SDL;
@@ -77,17 +72,11 @@ void Audio::Init() {
     mAvailableAudioBackends->push_back(AudioBackend::COREAUDIO);
 #endif
 #ifdef __EMSCRIPTEN__
-    // SOH [WASM] First, so it is the default: see WebAudioAudioPlayer.h for why SDL's
-    // main-thread audio glitches on every long frame.
     mAvailableAudioBackends->push_back(AudioBackend::WEBAUDIO);
 #endif
     mAvailableAudioBackends->push_back(AudioBackend::SDL);
     mAvailableAudioBackends->push_back(AudioBackend::NUL);
 
-    // A config written on another platform can name a backend this build does not have:
-    // "coreaudio" from a Mac install, opened on Windows or in a browser. InitAudioPlayer would
-    // fall through to the null player and the game would run silent without a word, so use
-    // this platform's preferred backend instead.
     AudioBackend backend = GetSavedAudioBackend();
     if (std::find(mAvailableAudioBackends->begin(), mAvailableAudioBackends->end(), backend) ==
         mAvailableAudioBackends->end()) {
@@ -100,9 +89,6 @@ void Audio::Init() {
 
 std::shared_ptr<AudioPlayer> Audio::GetAudioPlayer() {
 #ifdef __EMSCRIPTEN__
-    // SOH [WASM] The Web Audio player's worklet loads after Init returns; if that load failed
-    // the player is silent for good. Every audio call comes through here, so this is where a
-    // dead player gets replaced. The old one is released, which closes its context.
     if (mAudioPlayer && mAudioPlayer->HasFailed()) {
         FallBackToSdl("the AudioWorklet could not be loaded");
     }
@@ -117,7 +103,6 @@ AudioBackend Audio::GetCurrentAudioBackend() {
 AudioBackend Audio::GetSavedAudioBackend() {
     std::string backendName = mConfig->GetString("Window.AudioBackend");
 
-    // Environment wins over the config, like SHIP_HOME; it is the only way to reach CoreAudio on macOS.
     const char* env = std::getenv("SHIP_AUDIO_BACKEND");
     const bool fromEnv = env != nullptr && *env != '\0';
     if (fromEnv) {
@@ -172,7 +157,6 @@ AudioBackend Audio::GetSavedAudioBackend() {
 #endif
 
 #ifdef __EMSCRIPTEN__
-    // SOH [WASM] The AudioWorklet player; SDL's Emscripten player runs on the main thread.
     return AudioBackend::WEBAUDIO;
 #endif
 

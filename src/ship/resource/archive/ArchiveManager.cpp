@@ -66,7 +66,6 @@ std::shared_ptr<File> ArchiveManager::LoadFile(uint64_t hash) {
         return nullptr;
     }
 
-    // Resolve with this manager's own table: the archives' hash overloads go through the Context's.
     const std::string* filePath = HashToString(hash);
     if (filePath == nullptr) {
         return nullptr;

@@ -4,12 +4,9 @@
 #include <mutex>
 
 namespace ComboRando::CrossDungeon {
-// OoT's native Off/On dungeon and master entrance flags are 0/1. Gameplay needs
-// their safety behavior for a bound cross map, while stored settings stay native.
 inline uint8_t EffectiveEntranceSetting(uint8_t nativeValue, bool crossEnabled, bool entranceRule) {
     return crossEnabled && entranceRule && nativeValue == 0 ? 1 : nativeValue;
 }
-// Optional native save metadata is fail-closed and backward compatible with saves predating the feature.
 inline int32_t ReadCheckpoint(const nlohmann::json& save) {
     auto it = save.find("crossDungeonCheckpoint");
     if (it == save.end() || !it->is_number_integer())
@@ -17,8 +14,6 @@ inline int32_t ReadCheckpoint(const nlohmann::json& save) {
     const auto value = it->get<int64_t>();
     return value >= 0 && value <= 0xFFFF ? static_cast<int32_t>(value) : -1;
 }
-// One field serves a frozen source checkpoint and an active destination dungeon checkpoint.
-// Restoring a dungeon does not release its ownership; only an actual outside scene does.
 class CheckpointState {
   public:
     void Load(int32_t index) {
@@ -58,25 +53,24 @@ class CheckpointState {
     int32_t saved = -1;
     int32_t recovery = -1;
 };
-// Gameplay owns this state independently of the temporary reachability/oracle access state.
 class RuntimeState {
   public:
     struct Transition {
         Endpoint to;
-        Endpoint checkpoint; // Safe native source endpoint persisted before another host runs.
+        Endpoint checkpoint;
         std::optional<Endpoint> arrivalCheckpoint = std::nullopt;
     };
     struct BossRecovery {
-        Endpoint arena;  // Physical identity retained independently of source recovery.
-        Endpoint source; // The boss ingress used to reach the physical arena.
-        Endpoint parent; // Safe recovery within that source's native parent.
+        Endpoint arena;
+        Endpoint source;
+        Endpoint parent;
         bool operator==(const BossRecovery&) const = default;
     };
     explicit RuntimeState(int host) : game(host) {
     }
 
     void Install(const nlohmann::json& seed) {
-        auto next = Decode(seed); // Transactional: malformed seeds do not clear a queued handoff.
+        auto next = Decode(seed);
         std::vector<Dungeon> nextDungeons;
         if (!next.empty())
             for (const auto& d : seed.at("dungeons"))
@@ -88,7 +82,7 @@ class RuntimeState {
         routes = std::move(next);
         dungeons = std::move(nextDungeons);
         if (bossRecoveryResume && RecoveryForBoss(bossRecoveryResume->arena) != bossRecoveryResume)
-            bossRecoveryResume.reset(); // Recovery-only metadata can change without changing route endpoints.
+            bossRecoveryResume.reset();
     }
     bool Enabled() const {
         return !routes.empty();
@@ -147,7 +141,6 @@ class RuntimeState {
     }
     bool QueueBossRecovery(Endpoint arena) {
         const auto recovery = RecoveryForBoss(arena);
-        // Unlike a general arrival queue, this can only resume the inverse ingress's own host.
         if (!recovery || arena.game == game || recovery->source.game != game)
             return false;
         bossRecoveryResume = recovery;
@@ -184,7 +177,6 @@ class RuntimeState {
         return IsRecoveryEntrance(index) ? index : -1;
     }
     bool QueueArrival(int32_t index) {
-        // The peer may only queue a destination actually present in this seed for this host.
         for (const auto& r : routes) {
             if (r.to == Endpoint{ game, index }) {
                 arrival = index;

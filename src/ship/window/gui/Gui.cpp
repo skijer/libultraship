@@ -112,22 +112,16 @@ void Gui::Init() {
 }
 
 ImGuiContext* Gui::GetImGuiContext() {
-    // Evaluated inside libultraship.dll, so this returns libultraship's GImGui (the real context).
     return ImGui::GetCurrentContext();
 }
 
-// Registers the Gui-owned resource factories (Font, GuiTexture) on the Context's CURRENTLY ACTIVE
-// ResourceManager. Called once at Gui::Init, and again by every game that brings its own manager
-// into a shared Context.
 void Gui::RegisterResourceFactories() {
-    GetGameOverlay()->Init(); // registers the Font factory on the active RM
+    GetGameOverlay()->Init();
     Context::GetRawInstance()->GetResourceManager()->GetResourceLoader()->RegisterResourceFactory(
         std::make_shared<ResourceFactoryBinaryGuiTextureV0>(), RESOURCE_FORMAT_BINARY, "GuiTexture",
         static_cast<uint32_t>(RESOURCE_TYPE_GUI_TEXTURE), 0);
 }
 
-// Default no-op. The ImGui renderer backend lives in the Fast3D layer (Fast3dGui) in current
-// upstream, so the actual font-texture invalidation is overridden there. See Fast3dGui::RebuildFontTexture.
 void Gui::RebuildFontTexture() {
 }
 
@@ -135,7 +129,6 @@ void Gui::ImGuiWMInit() {
 }
 
 void Gui::ShutDownImGui(Ship::Window* window) {
-    // Idempotent: games sharing one ImGui context each reach this on exit.
     if (ImGui::GetCurrentContext() == nullptr || ImGui::GetIO().BackendPlatformUserData == nullptr) {
         return;
     }
@@ -206,7 +199,6 @@ void Gui::UpdateGamepadNavigation() {
 }
 
 void Gui::DrawMenu() {
-    // Per frame: popups (boot prompts, the file browser) have no open/close event to hook.
     UpdateGamepadNavigation();
 
     const std::shared_ptr<Window> wnd = Context::GetRawInstance()->GetWindow();

@@ -15,7 +15,6 @@ class HostState {
     bool overworld = true;
     std::set<int32_t> arrivals;
 
-    // Routes or passages into the other game: the search then starts from the arrivals Fleet grants.
     bool HasLinks() const {
         return !routes.empty() || !passages.empty();
     }

@@ -2,7 +2,6 @@
 #include "ship/audio/WebAudioAudioPlayer.h"
 #include <spdlog/spdlog.h>
 
-// Implemented in WebAudioAudioPlayer.js, linked as an Emscripten JS library.
 extern "C" {
 int lus_webaudio_init(int sampleRate, int channels, int ringCapacityFrames);
 void lus_webaudio_close(void);
@@ -13,14 +12,8 @@ void lus_webaudio_play(const uint8_t* buf, size_t len, int maxQueuedFrames);
 
 namespace Ship {
 
-// Frames the worklet's ring buffer can hold: half a second at 32 kHz, well above the point at
-// which DoPlay stops accepting updates.
 static const int32_t kRingCapacityFrames = 16384;
 
-// Frames queued but not yet consumed beyond which an update is discarded rather than queued.
-// The game only tops the queue up while it is below its target, so this is only reached when
-// nothing is consuming: an AudioContext still suspended for want of a user gesture, or a
-// hidden tab. Matches SDLAudioPlayer::DoPlay, so the game's tuning applies to both players.
 static const int32_t kMaxQueuedFrames = 6000;
 
 WebAudioAudioPlayer::~WebAudioAudioPlayer() {
@@ -46,9 +39,6 @@ int32_t WebAudioAudioPlayer::Buffered() {
     return lus_webaudio_buffered();
 }
 
-// The worklet loads asynchronously after DoInit has already returned true. If that load
-// fails there is no audio and never will be; Audio::GetAudioPlayer polls this and falls
-// back to SDL.
 bool WebAudioAudioPlayer::HasFailed() {
     return lus_webaudio_failed() != 0;
 }

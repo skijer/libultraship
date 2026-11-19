@@ -289,7 +289,6 @@ void ConsoleVariable::ClearBlock(const char* name) {
     Load();
 }
 
-// Goes through the typed accessors so a copy between this store and the host lands in the right one.
 void ConsoleVariable::CopyVariable(const char* from, const char* to) {
     auto variableFrom = Get(from);
     if (variableFrom == nullptr || std::string_view(from) == to) {

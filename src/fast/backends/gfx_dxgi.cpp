@@ -493,7 +493,6 @@ static LRESULT CALLBACK gfx_dxgi_wnd_proc(HWND h_wnd, UINT message, WPARAM w_par
             break;
         case WM_DROPFILES:
             DragQueryFileA((HDROP)w_param, 0, fileName, 256);
-            // A drop can arrive before the game created its FileDropMgr (window-only boot).
             if (auto fileDropMgr = Ship::Context::GetRawInstance()->GetFileDropMgr()) {
                 fileDropMgr->SetDroppedFile(fileName);
             }

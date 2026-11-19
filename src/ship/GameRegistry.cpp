@@ -7,7 +7,6 @@
 
 namespace Ship {
 
-// Entries live until Unregister at deinit, so raw pointers handed out stay valid while games run.
 static std::shared_mutex sGamesMutex;
 static std::unordered_map<std::string, std::shared_ptr<GameServices>> sGames;
 static std::atomic<GameServices*> sActiveGame = nullptr;

@@ -7,7 +7,6 @@
 namespace Fast {
 static void ReadVertexRecords(Ship::BinaryReader& reader, Vertex& vertex, uint32_t count, bool s32Positions) {
     vertex.VertexList.reserve(count);
-    // 3 * (s16 | s32) pos + u16 flag + 2 * s16 tc + 4 * u8 colour
     vertex.RecordSize = s32Positions ? 22 : 16;
 
     for (uint32_t i = 0; i < count; i++) {

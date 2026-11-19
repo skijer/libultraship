@@ -68,9 +68,9 @@ constexpr int8_t OTR_G_DL_INDEX = OPCODE(0x3d);
 constexpr int8_t OTR_G_READFB = OPCODE(0x3e);
 constexpr int8_t OTR_G_REGBLENDEDTEX = OPCODE(0x3f);
 constexpr int8_t OTR_G_SETINTENSITY = OPCODE(0x40);
-constexpr int8_t OTR_G_FOGF = OPCODE(0x41); // SOH [Unbound] float fog factor: w1 -> { float mul, float offset }
-constexpr int8_t OTR_G_SETTOON = OPCODE(0x4b);    // SOH [Enhancement] toon lighting
-constexpr int8_t OTR_G_SETTOONKEY = OPCODE(0x4c); // SOH [Enhancement] toon lighting key light
+constexpr int8_t OTR_G_FOGF = OPCODE(0x41);
+constexpr int8_t OTR_G_SETTOON = OPCODE(0x4b);
+constexpr int8_t OTR_G_SETTOONKEY = OPCODE(0x4c);
 constexpr int8_t OTR_G_MOVEMEM_HASH = OPCODE(0x42);
 constexpr int8_t OTR_G_PUSH_SHADER = OPCODE(0x43);
 constexpr int8_t OTR_G_POP_SHADER = OPCODE(0x44);
@@ -897,9 +897,7 @@ typedef union F3DVtx {
     long long int force_structure_alignment;
 } F3DVtx;
 
-// Vertices are stored in OTR/O2R archives in the original 16-byte N64 layout (s16 positions), and exported
-// display lists carry BYTE offsets into that data. sizeof(F3DVtx) is not that size when GBI_S32_VTX is on,
-// so an exported byte offset must be divided by this - never by sizeof(F3DVtx) - to get an element index.
+// Exported display lists carry byte offsets in 16-byte units, not sizeof(F3DVtx) units.
 #define OTR_EXPORTED_VTX_SIZE 16
 
 /*

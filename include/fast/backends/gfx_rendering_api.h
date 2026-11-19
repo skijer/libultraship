@@ -81,8 +81,6 @@ class GfxRenderingAPI {
     virtual ImTextureID GetTextureById(int id) = 0;
     virtual void SetCurrentPrimDepth(float depth) = 0;
 
-    // SOH [Enhancement] Toon lighting: the interpreter pushes the per-object dominant light here
-    // before each batch; backends read the mToon* members in their per-draw uniform paths.
     virtual void SetToonLighting(const float dir[3], const float color[3], const float ambient[3]) {
         for (int i = 0; i < 3; i++) {
             mToonLightDir[i] = dir[i];
@@ -91,13 +89,6 @@ class GfxRenderingAPI {
         }
     }
 
-    // SOH [Enhancement] Toon lighting: the application pushes the frame-global ramp shape here (the
-    // values are app-side tuning, so the framework never reaches into the app's config to read them).
-    // Backends read the mToonRamp* members in their per-draw uniform paths; they keep their default
-    // (a plain two-tone ramp) until the application overrides them.
-    // debug != 0 switches the toon variant to a diagnostic view: each relit object is drawn as flat
-    // white on the lit side of the ramp and flat black on the shadow side (albedo discarded), so it is
-    // obvious at a glance which draws actually receive toon lighting.
     virtual void SetToonRamp(float center, float softness, float highlight, float shadow, float debug) {
         mToonRampCenter = center;
         mToonRampSoftness = softness;

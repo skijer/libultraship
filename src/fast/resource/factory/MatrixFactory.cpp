@@ -20,7 +20,6 @@ ResourceFactoryBinaryMatrixV0::ReadResource(std::shared_ptr<Ship::File> file,
         }
     }
 #elif defined(GBI_FLOAT_MTX)
-    // Stored data is the N64 s16.16 layout (16 int-part words then 16 frac-part words); unpack to float.
     int32_t words[16];
     for (size_t i = 0; i < 16; i++) {
         words[i] = reader->ReadInt32();

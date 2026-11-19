@@ -43,7 +43,6 @@ bool ResourceLoader::RegisterResourceFactory(std::shared_ptr<ResourceFactory> fa
 
     ResourceFactoryKey key{ .resourceFormat = format, .resourceType = type, .resourceVersion = version };
     if (mFactories.contains(key)) {
-        // Registering the same factory instance again under another type name only adds the name alias.
         if (mFactories[key] == factory) {
             return true;
         }
@@ -90,7 +89,7 @@ std::shared_ptr<ResourceFactory> ResourceLoader::GetFactory(uint32_t format, std
 
 std::shared_ptr<ResourceInitData> ResourceLoader::ReadResourceInitDataLegacy(const std::string& filePath,
                                                                              std::shared_ptr<File> fileToLoad) {
-    // Determine if file is binary, XML or JSON...
+    // Determine if file is binary or XML...
     if (fileToLoad->Buffer->at(0) == '{') {
         return ReadResourceInitDataJson(filePath, fileToLoad);
     }
@@ -271,7 +270,7 @@ std::shared_ptr<IResource> ResourceLoader::LoadResource(std::string filePath, st
             fileToLoad->Reader = CreateXMLReader(fileToLoad, initData);
             break;
         case RESOURCE_FORMAT_JSON:
-            break; // JSON factories parse the buffer (and any lower archive layers) themselves
+            break;
     }
 
     // initData->Parent = shared_from_this();
@@ -329,11 +328,6 @@ ResourceLoader::ReadResourceInitDataBinary(const std::string& filePath, std::sha
     return resourceInitData;
 }
 
-/**
- * JSON resources declare their type as a top-level "$schema": "<type name>/<version>", e.g. "unbound/scene/1".
- * A patch layer may omit it, so every mounted layer is searched, topmost first. Only that one key is read here;
- * the factory parses the document.
- */
 static std::string FindJsonSchema(const std::vector<std::shared_ptr<File>>& layers) {
     for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
         auto doc = nlohmann::json::parse((*it)->Buffer->begin(), (*it)->Buffer->end(), nullptr, false, true);

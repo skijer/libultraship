@@ -25,9 +25,6 @@
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 240
 
-// SOH [Enhancement] Max floats packed per vertex into the Fast3D VBO. Grew from 32 to 40 when toon
-// lighting added a world-space normal attribute. The interpreter packs from this and every backend
-// sizes its vertex buffers from it, so they stay in lockstep — change it in one place only.
 #define VBO_MAX_FLOATS_PER_VERTEX 40
 
 #include <stdint.h>
@@ -86,7 +83,7 @@ enum class ShaderOpts {
     TEXEL1_BLEND,
     PRIM_DEPTH,
     TOON,
-    PRISM_SHADER, // 16-bit width; SHADER_ID_SHIFT follows this enum.
+    PRISM_SHADER, // 16-bit width
     MAX
 };
 
@@ -119,7 +116,7 @@ struct CCFeatures {
     bool opt_invisible;
     bool opt_grayscale;
     bool opt_prim_depth;
-    bool opt_toon; // SOH [Enhancement] toon lighting
+    bool opt_toon;
     bool usedTextures[2];
     bool used_masks[2];
     bool used_blend[2];
@@ -226,7 +223,6 @@ struct LoadedVertex {
     float u, v;
     struct RGBA color;
     uint8_t clip_rej;
-    // SOH [Enhancement] World-space vertex normal, forwarded to the fragment shader for toon lighting.
     float nx, ny, nz;
 };
 
@@ -254,21 +250,16 @@ struct RSP {
     uint8_t current_num_lights;        // includes ambient light
     bool lights_changed;
 
-    // SOH [Enhancement] Toon lighting: the single dominant light chosen for the current object,
-    // recomputed when lights change. World-space direction, light color, and ambient color (0..1).
     float toon_light_dir[3];
     float toon_light_color[3];
     float toon_ambient[3];
 
-    // SOH [Enhancement] Toon lighting: a per-object key light supplied by the game (gSPToonKey),
-    // world-space direction + color. When valid it overrides the renderer's own light averaging so
-    // the game can drive a Wind Waker-style sun/torch key with smooth day-night animation.
     bool toon_key_valid;
     float toon_key_dir[3];
     float toon_key_color[3];
 
     uint32_t geometry_mode;
-    float fog_mul, fog_offset; // SOH [Unbound] float so fog can start beyond the s16 range (OTR_G_FOGF)
+    float fog_mul, fog_offset;
 
     uint32_t extra_geometry_mode;
 
@@ -326,7 +317,7 @@ struct RDP {
     uint32_t other_mode_l, other_mode_h;
     uint64_t combine_mode;
     bool grayscale;
-    bool toon = false; // Opt-in cel shading for the current draw.
+    bool toon = false;
 
     uint8_t prim_lod_fraction;
     uint16_t prim_depth;
@@ -355,7 +346,6 @@ typedef enum Attribute {
     MV_LIGHT,
 } Attribute;
 
-// Data, unlike functions, needs an explicit dllimport to cross into a shared libultraship.
 #if defined(_WIN32) && defined(LUS_SHARED_LIBRARY) && !defined(libultraship_EXPORTS)
 extern __declspec(dllimport) GfxExecStack g_exec_stack;
 #else
@@ -469,8 +459,6 @@ class Interpreter {
     // pointer and dropped with the texture cache. Safe for ports whose display
     // lists carry stable path pointers; off by default.
     void SetResolvedResourceCacheEnabled(bool enabled);
-    // SOH [Enhancement] Toon lighting: pick the single dominant light for the current object and
-    // cache its world-space direction / color / ambient in the RSP for the fragment shader.
     void SelectToonLight();
 
     void GfxSpMatrix(uint8_t params, const int32_t* addr);
@@ -524,8 +512,6 @@ class Interpreter {
 
     void SpReset();
     void* SegAddr(uintptr_t w1);
-    // Same, for vertex references: the encoded offset is in units of the archive's 16-byte vertex,
-    // which is not sizeof(F3DVtx) under GBI_S32_VTX. See OTR_EXPORTED_VTX_SIZE.
     F3DVtx* SegAddrVtx(uintptr_t w1);
 
     static const char* CCMUXtoStr(uint32_t ccmux);

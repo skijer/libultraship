@@ -48,25 +48,16 @@ typedef struct CVar {
  * from a JSON file via the Config layer. Values can be registered with defaults,
  * queried, mutated, copied, and cleared at runtime.
  *
- * Obtain the instance of the running game from Context::GetConsoleVariables().
+ * Obtain the singleton instance from Context::GetConsoleVariables().
  */
 class ConsoleVariable {
   public:
-    /** @brief Store backed by the Context's Config. */
     ConsoleVariable();
-    /** @brief Store backed by its own Config, e.g. one game's settings file in a shared Context. */
     explicit ConsoleVariable(std::shared_ptr<Config> config);
     ~ConsoleVariable();
 
-    /**
-     * @brief Routes every CVar named in `keys` (or nested under one, "key.child") to `host`.
-     *
-     * Lets a game store keep its own settings while engine-wide ones, such as the window or
-     * renderer, live once in the host store.
-     */
     void DelegateToHost(std::shared_ptr<ConsoleVariable> host, std::vector<std::string> keys);
 
-    /** @brief The CVars libultraship itself reads: renderer, window, controllers and engine windows. */
     static const std::vector<std::string>& GetEngineKeys();
 
     /**

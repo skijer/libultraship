@@ -2,7 +2,6 @@
 #include "CrossDungeonSeed.h"
 
 namespace ComboRando::CrossDungeon {
-// Derive the candidate's returns from recorded native data without touching the live graph or RNG.
 inline std::map<int32_t, int32_t> ParseNativeOverrides(const nlohmann::json& raw,
                                                        const std::map<int32_t, int>& knownTypes, size_t capacity) {
     if (!raw.is_array() || raw.size() > capacity)

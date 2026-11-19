@@ -66,8 +66,6 @@ void ResourceManager::Init(const std::vector<std::string>& archivePaths,
         mThreadPool->pause();
     }
 #else
-    // SOH [WASM] No pool: see ResourceManager::SubmitTask. Constructing one would spawn
-    // std::threads, which abort in a build without pthreads.
     (void)reservedThreadCount;
 #endif
 }
@@ -114,7 +112,6 @@ GameServices* ResourceManager::GetGameToLoadAs() const {
 
 std::shared_ptr<IResource> ResourceManager::LoadResourceProcess(const ResourceIdentifier& identifier, bool loadExact,
                                                                 std::shared_ptr<ResourceInitData> initData) {
-    // A cross-game load runs as the owning game, so factories reach this manager through the Context.
     GameScope ownerScope(GetGameToLoadAs());
 
     // Check for and remove the OTR signature

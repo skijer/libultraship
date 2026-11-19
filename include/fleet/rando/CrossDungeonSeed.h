@@ -37,7 +37,6 @@ inline PoolOptions ParseOptions(const nlohmann::json& j) {
 }
 inline PoolOptions OptionsFromSeed(const nlohmann::json& seed) {
     auto options = seed.is_object() && seed.contains("options") ? ParseOptions(seed.at("options")) : PoolOptions{};
-    // The recorded seed version, never today's menu choices, owns membership on reload.
     options.legacyInteriors = seed.is_object() && seed.value("version", 4) < 4;
     return options;
 }
@@ -133,7 +132,7 @@ inline Dungeon ParseDungeon(const nlohmann::json& j) {
 }
 inline nlohmann::json Encode(const std::vector<Dungeon>& dungeons, const std::vector<size_t>& permutation,
                              const ExitDestinations& exitTo = {}) {
-    FromPermutation(dungeons, permutation, exitTo); // Never persist a map that cannot be replayed.
+    FromPermutation(dungeons, permutation, exitTo);
     auto entries = nlohmann::json::array();
     for (const auto& d : dungeons)
         entries.push_back(DungeonJson(d));
@@ -174,7 +173,7 @@ inline nlohmann::json Encode(const std::vector<Dungeon>& dungeons, const std::ve
 }
 inline std::vector<Route> Decode(const nlohmann::json& j) {
     if (j.is_null())
-        return {}; // A seed written before this feature.
+        return {};
     if (!j.at("enabled").is_boolean())
         throw std::invalid_argument("cross-dungeon enabled flag must be boolean");
     if (!j.at("enabled").get<bool>())

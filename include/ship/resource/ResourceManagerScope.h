@@ -6,12 +6,6 @@
 #include "ship/resource/ResourceManager.h"
 
 namespace Ship {
-/**
- * @brief RAII: makes `target` the ResourceManager seen by this scope, restoring on exit.
- *
- * A registered game's manager is selected per thread through GameScope; any other manager
- * swaps the Context's own, which is only safe on the thread that owns the Context.
- */
 class ResourceManagerScope {
   public:
     explicit ResourceManagerScope(std::shared_ptr<ResourceManager> target)

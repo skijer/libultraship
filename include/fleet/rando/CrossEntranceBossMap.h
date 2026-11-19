@@ -19,7 +19,6 @@ inline BossSourceMap EmptyBossSources() {
     result.fill(-1);
     return result;
 }
-// The physical destination reports its kill; completion belongs to the source boss door.
 inline BossSourceMap BossSources(const nlohmann::json& seed) {
     auto result = EmptyBossSources();
     if (Decode(seed).empty())

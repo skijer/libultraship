@@ -260,8 +260,7 @@ void GfxRenderingAPIDX11::Init() {
     ZeroMemory(&vertex_buffer_desc, sizeof(D3D11_BUFFER_DESC));
 
     vertex_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
-    // Matches the CPU mBufVbo allocation in interpreter.cpp (VBO_MAX_FLOATS_PER_VERTEX floats/vertex).
-    vertex_buffer_desc.ByteWidth = 256 * VBO_MAX_FLOATS_PER_VERTEX * 3 * sizeof(float); // Same as buf_vbo size in gfx_pc
+    vertex_buffer_desc.ByteWidth = 256 * VBO_MAX_FLOATS_PER_VERTEX * 3 * sizeof(float);
     vertex_buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
     vertex_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     vertex_buffer_desc.MiscFlags = 0;
@@ -299,7 +298,6 @@ void GfxRenderingAPIDX11::Init() {
     constant_buffer_desc.ByteWidth = sizeof(PerPrimDepthCB);
     ThrowIfFailed(mDevice->CreateBuffer(&constant_buffer_desc, nullptr, mPerPrimDepthCb.GetAddressOf()),
                   mWindowBackend->GetWindowHandle(), "Failed to create per-prim-depth constant buffer.");
-    // SOH [Enhancement] Create the toon-lighting constant buffer (register b3), uploaded per toon draw.
     constant_buffer_desc.ByteWidth = sizeof(PerToonCB);
     ThrowIfFailed(mDevice->CreateBuffer(&constant_buffer_desc, nullptr, mPerToonCb.GetAddressOf()),
                   mWindowBackend->GetWindowHandle(), "Failed to create toon-lighting constant buffer.");
@@ -485,7 +483,6 @@ struct ShaderProgram* GfxRenderingAPIDX11::CreateAndLoadNewShader(uint64_t shade
                              D3D11_INPUT_PER_VERTEX_DATA,
                              0 };
     }
-    // SOH [Enhancement] Toon lighting world-space normal (order must match the vbo packing).
     if (cc_features.opt_toon) {
         ied[ied_index++] = {
             "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0
@@ -527,7 +524,7 @@ struct ShaderProgram* GfxRenderingAPIDX11::CreateAndLoadNewShader(uint64_t shade
     prg->shader_id1 = shader_id1;
     prg->numInputs = cc_features.numInputs;
     prg->numFloats = numFloats;
-    prg->opt_toon = cc_features.opt_toon; // SOH [Enhancement] toon lighting
+    prg->opt_toon = cc_features.opt_toon;
     prg->usedTextures[0] = cc_features.usedTextures[0];
     prg->usedTextures[1] = cc_features.usedTextures[1];
     prg->usedTextures[2] = cc_features.used_masks[0];
@@ -790,9 +787,6 @@ void GfxRenderingAPIDX11::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, siz
         mContext->Unmap(mPerPrimDepthCb.Get(), 0);
         mPrimDepthDirty = false;
     }
-    // SOH [Enhancement] Toon lighting: per-object dominant light + ramp shape into the dedicated toon
-    // CB (b3), re-uploaded per toon draw (WRITE_DISCARD makes this safe). Only the toon pixel shader
-    // reads it, and PerFrameCB is left untouched so it stays frame-global.
     if (mShaderProgram->opt_toon) {
         for (int j = 0; j < 3; j++) {
             mPerToonCbData.toon_light_dir[j] = mToonLightDir[j];

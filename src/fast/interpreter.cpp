@@ -72,7 +72,7 @@ std::stack<std::string> currentDir;
 #define RATIO_Y(activeFb, dims) \
     ((mFbActive ? activeFb->second.applied_height : dims.height) / (2.0f * HALF_SCREEN_HEIGHT(activeFb)))
 
-#define TEXTURE_CACHE_MAX_SIZE 8192 // SOH [Unbound] was 1024
+#define TEXTURE_CACHE_MAX_SIZE 8192
 
 namespace Fast {
 
@@ -114,18 +114,14 @@ static std::string GetPathWithoutFileName(char* filePath) {
     return filePath;
 }
 
-// "__OTR__@<game>:<path>" draws a DL, and everything it references, from another game's archives,
-// which reuse the same paths. Each entry lives until the exec stack unwinds below execDepthAtPush.
 struct CrossRMOverride {
     std::shared_ptr<Ship::ResourceManager> rm;
     size_t execDepthAtPush;
 };
 static std::vector<CrossRMOverride> g_crossRMStack;
 
-// G_COMBO_RM_PUSH/POP brackets route raw Gfx* spans (skeleton limbs) that carry no path marker;
-// only POP removes them. Assumes they are pushed at top level by game code, never inside resources.
+// Assumes G_COMBO_RM_PUSH is issued at top level by game code, never inside resources.
 static constexpr size_t kBracketSentinel = SIZE_MAX;
-// PUSHes skipped for an unknown game, so their POPs do not remove a real entry.
 static int g_skippedBracketPushes = 0;
 
 static std::shared_ptr<Ship::ResourceManager> ActiveResMgr() {
@@ -140,7 +136,6 @@ constexpr size_t MAX_TRI_BUFFER = 256;
 Interpreter::Interpreter() {
     mRsp = new RSP();
     mRdp = new RDP();
-    // SOH [Enhancement] 40 (was 32) floats/vertex max to leave headroom for the toon normal attribute.
     mBufVbo = new float[MAX_TRI_BUFFER * (VBO_MAX_FLOATS_PER_VERTEX * 3)];
 }
 
@@ -162,8 +157,6 @@ static constexpr float N64_PRIM_DEPTH_MAX = 32767.0f;
 void Interpreter::Flush() {
     if (mBufVboLen > 0) {
         mRapi->SetCurrentPrimDepth((float)mRdp->prim_depth / N64_PRIM_DEPTH_MAX);
-        // SOH [Enhancement] Push the dominant toon light for this batch. The backend only consumes it
-        // when the bound shader is a toon variant, so it is a no-op for ordinary draws.
         mRapi->SetToonLighting(mRsp->toon_light_dir, mRsp->toon_light_color, mRsp->toon_ambient);
         mRapi->DrawTriangles(mBufVbo, mBufVboLen, mBufVboNumTris);
         mBufVboLen = 0;
@@ -1018,7 +1011,6 @@ void Interpreter::ImportTextureCi4(int tile, bool importReplacement) {
     const uint8_t* palette;
 
     if (mRdp->palettes[palIdx / 8] == nullptr) {
-        // As in the CI8 path: a silent return leaves a stale GPU texture. Log once per address.
         static std::unordered_set<const void*> sReportedNullPalettes4;
         if (sReportedNullPalettes4.insert((const void*)addr).second) {
             SPDLOG_ERROR("CI4: null palette slot {} for palIdx={}", palIdx / 8, palIdx);
@@ -1108,8 +1100,6 @@ void Interpreter::ImportTextureCi8(int tile, bool importReplacement) {
     uint32_t lineSizeBytes = mRdp->loaded_texture[mRdp->texture_tile[tile].tmem_index].line_size_bytes;
 
     if (mRdp->palettes[0] == nullptr || mRdp->palettes[1] == nullptr) {
-        // Returning here leaves the GPU texture holding whatever was in it — visible as noise on an
-        // otherwise correct model, so say so loudly (once per address, this runs per frame).
         static std::unordered_set<const void*> sReportedNullPalettes;
         if (sReportedNullPalettes.insert((const void*)addr).second) {
             SPDLOG_ERROR("CI8: null palette (pal0={}, pal1={})", static_cast<const void*>(mRdp->palettes[0]),
@@ -1519,10 +1509,6 @@ void Interpreter::CalculateNormalDir(const F3DLight_t* light, float coeffs[3]) {
     Interpreter::NormalizeVector(coeffs);
 }
 
-// SOH [Enhancement] Resolve the single effective light for the current object's toon shading:
-// ambient from the binding's ambient light, and the key direction/colour from the application-supplied
-// gSPToonKey (defaulting to a straight-on white key if none was provided this batch). The application
-// chooses and eases the key; the renderer just consumes it.
 void Interpreter::SelectToonLight() {
     int amb_idx = mRsp->current_num_lights - 1;
     if (amb_idx < 0) {
@@ -1532,15 +1518,7 @@ void Interpreter::SelectToonLight() {
     mRsp->toon_ambient[1] = mRsp->current_lights[amb_idx].l.col[1] / 255.0f;
     mRsp->toon_ambient[2] = mRsp->current_lights[amb_idx].l.col[2] / 255.0f;
 
-    // SOH [Enhancement] The game supplies one world-space key light per object via gSPToonKey. The
-    // forwarded normals are world-space too (see GfxSpVertex), so the key is used as-is — no
-    // object-space transform (which would only be correct for one limb of a batched skeletal actor,
-    // but they share a single light uniform). The game drives a single Wind Waker-style key (sun by
-    // day, animating to torches at night).
     if (!mRsp->toon_key_valid) {
-        // A toon batch reached here with no key supplied. Not expected in normal use — the game emits
-        // gSPToonKey before every object's geometry — so default to a straight-on white key that at
-        // least lights the object evenly rather than leaving the shade undefined.
         mRsp->toon_light_dir[0] = 0.0f;
         mRsp->toon_light_dir[1] = 0.0f;
         mRsp->toon_light_dir[2] = 1.0f;
@@ -1553,8 +1531,7 @@ void Interpreter::SelectToonLight() {
     mRsp->toon_light_dir[0] = mRsp->toon_key_dir[0];
     mRsp->toon_light_dir[1] = mRsp->toon_key_dir[1];
     mRsp->toon_light_dir[2] = mRsp->toon_key_dir[2];
-    // Guard a zero-length key (s8 quantization can collapse a small direction) so NormalizeVector
-    // doesn't divide by zero and produce NaNs — fall back to straight-on.
+    // s8 quantization can collapse a small key direction to zero length.
     float key_len2 = mRsp->toon_light_dir[0] * mRsp->toon_light_dir[0] +
                      mRsp->toon_light_dir[1] * mRsp->toon_light_dir[1] +
                      mRsp->toon_light_dir[2] * mRsp->toon_light_dir[2];
@@ -1575,7 +1552,6 @@ void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
 
     if (auto it = mCurMtxReplacements->find((Mtx*)addr); it != mCurMtxReplacements->end()) {
 #if defined(GBI_FLOATS) || defined(GBI_FLOAT_MTX)
-        // Float matrices: no fixed-point quantisation (the int cast below overflows past +/-32767).
         memcpy(matrix, it->second.mf, sizeof(matrix));
 #else
         for (int i = 0; i < 4; i++) {
@@ -1711,7 +1687,7 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
                 static const Light_t lookat_y = {{0, 0, 0}, 0, {0, 0, 0}, 0, {0, 127, 0}, 0};*/
                 CalculateNormalDir(&mRsp->lookat[0], mRsp->current_lookat_coeffs[0]);
                 CalculateNormalDir(&mRsp->lookat[1], mRsp->current_lookat_coeffs[1]);
-                if (mRdp->toon) { // SOH [Enhancement] toon lighting: cache the dominant light
+                if (mRdp->toon) {
                     SelectToonLight();
                 }
                 mRsp->lights_changed = false;
@@ -1777,19 +1753,7 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
             d->color.g = g > 255 ? 255 : g;
             d->color.b = b > 255 ? 255 : b;
 
-            // SOH [Enhancement] Toon lighting: forward the WORLD-space normal to the fragment shader
-            // and neutralize the vertex shade so the combiner emits pure albedo. The fragment shader
-            // then re-lights it with the single dominant light (also world-space, see SelectToonLight)
-            // through the toon ramp.
-            //
-            // The normal must be transformed object->world here, NOT left in object space: a skeletal
-            // actor (Link, NPCs) draws every limb under its own modelview matrix but batches them into
-            // a single draw call, while the light direction is one per-batch uniform. Object-space
-            // normals would each be in a different limb's space yet share that one uniform, so only one
-            // limb could ever be lit correctly. Transforming into world space puts every limb's normal
-            // in the same frame as the world-space key, so the single uniform is correct for all limbs.
-            // (object->world uses the same row-vector convention as the position transform above; the
-            // shader renormalizes, so uniform limb scale is harmless.)
+            // Normals must be in world space: limbs batch into one draw with a single light uniform.
             if (mRdp->toon) {
                 float(*mv)[4] = mRsp->modelview_matrix_stack[mRsp->modelview_matrix_stack_size - 1];
                 d->nx = vn->n[0] * mv[0][0] + vn->n[1] * mv[1][0] + vn->n[2] * mv[2][0];
@@ -1998,7 +1962,6 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
         (mRdp->other_mode_l & (3 << 24)) == (G_BL_0 << 24) && (mRdp->other_mode_l & (3 << 20)) == (G_BL_CLR_MEM << 20);
     bool use_grayscale = mRdp->grayscale;
     bool use_prim_depth = (mRdp->other_mode_l & G_ZS_PRIM) != 0;
-    // SOH [Enhancement] Toon lighting only applies to lit geometry (where vertex normals exist).
     bool use_toon = mRdp->toon && (mRsp->geometry_mode & G_LIGHTING);
 
     if (texture_edge) {
@@ -2298,8 +2261,6 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
             mBufVbo[mBufVboLen++] = mRdp->grayscale_color.a / 255.0f; // lerp interpolation factor (not alpha)
         }
 
-        // SOH [Enhancement] Toon lighting: world-space normal (aNormal). The dominant light/ambient
-        // are sent as uniforms (per draw), not per-vertex, to stay within the vertex-attribute limit.
         if (use_toon) {
             mBufVbo[mBufVboLen++] = v_arr[i]->nx;
             mBufVbo[mBufVboLen++] = v_arr[i]->ny;
@@ -3360,13 +3321,8 @@ void* Interpreter::SegAddr(uintptr_t w1) {
     }
 }
 
-// Vertices reached through a segment (a runtime vertex buffer, e.g. the Skin system's segment 8) are addressed
-// by a BYTE offset that was encoded when a vertex was 16 bytes. sizeof(F3DVtx) is larger under GBI_S32_VTX,
-// so the offset must be converted to an element index and re-scaled, or every vertex past the first is
-// misaligned. Identical to SegAddr when the two sizes agree.
-// Only correct for offsets authored in 16-byte units, i.e. every ROM-exported display list. A runtime-built
-// segmented address computed with sizeof(Vtx) (e.g. the unused z_fbdemo.c TransitionTile) would be rescaled
-// wrongly; such code must reference its vertices by raw pointer instead.
+// Only correct for offsets authored in 16-byte units; runtime-built addresses computed with sizeof(Vtx) would be
+// rescaled wrongly.
 F3DVtx* Interpreter::SegAddrVtx(uintptr_t w1) {
     if (w1 & 1) {
         uint32_t segNum = (uint32_t)(w1 >> 24);
@@ -3390,7 +3346,6 @@ void GfxExecStack::start(F3DGfx* dlist) {
     gfx_path.clear();
     cmd_stack.push(dlist);
     disp_stack.clear();
-    // A run never inherits routes left unpopped by the previous one.
     g_crossRMStack.clear();
     g_skippedBracketPushes = 0;
 }
@@ -3771,7 +3726,6 @@ bool gfx_vtx_handler_f3d(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *cmd0;
 
-    // The packed length is a byte count over the archive's vertex size, not the runtime struct's.
     gfx->GfxSpVertex((C0(0, 16)) / OTR_EXPORTED_VTX_SIZE, C0(16, 4), gfx->SegAddrVtx(cmd->words.w1));
 
     return false;
@@ -3794,16 +3748,11 @@ bool gfx_vtx_hash_handler_custom(F3DGfx** cmd0) {
         gfx->GfxSpVertex(C0(12, 8), C0(1, 7) - C0(12, 8), (F3DVtx*)offset);
         (*cmd0)++;
     } else {
-        // The exported offset is a BYTE offset into the vertex resource. Its unit is that resource's own
-        // on-disk record size (16 for vanilla v0, 22 for the s32 v1 form) - never sizeof(F3DVtx), which is
-        // the padded runtime struct. Ask the resource rather than assuming.
         auto resourceMgr = ActiveResMgr();
         auto res = resourceMgr->LoadResource(hash);
         F3DVtx* vtx = (F3DVtx*)resourceMgr->GetResourceRawPointer(res);
 
         if (vtx != NULL) {
-            // dynamic_cast, not static: a hash that resolved to some other resource type would otherwise be
-            // undefined behaviour. Falls back to the vanilla record size, which is what this assumed before.
             auto vertexRes = std::dynamic_pointer_cast<Fast::Vertex>(res);
             const uint32_t recordSize =
                 (vertexRes != nullptr && vertexRes->RecordSize != 0) ? vertexRes->RecordSize : OTR_EXPORTED_VTX_SIZE;
@@ -3847,14 +3796,13 @@ bool gfx_dl_otr_filepath_handler_custom(F3DGfx** cmd0) {
     bool hasRouteMarker = false;
     static constexpr char kOtrPrefix[] = "__OTR__";
     if (strncmp(fileName, kOtrPrefix, sizeof(kOtrPrefix) - 1) == 0 && fileName[sizeof(kOtrPrefix) - 1] == '@') {
-        const char* gameStart = fileName + sizeof(kOtrPrefix); // past '@'
+        const char* gameStart = fileName + sizeof(kOtrPrefix);
         const char* colon = strchr(gameStart, ':');
         if (colon != nullptr) {
             hasRouteMarker = true;
             std::string gameName(gameStart, colon - gameStart);
             routedRM = Ship::CrossRMRegistry::Get(gameName);
             if (routedRM != nullptr) {
-                // Interned: command words may be re-walked in later frames. One entry per routed path.
                 static std::unordered_set<std::string> sInternedStrippedPaths;
                 const std::string& stripped =
                     *sInternedStrippedPaths.insert(std::string(kOtrPrefix) + (colon + 1)).first;
@@ -3867,7 +3815,6 @@ bool gfx_dl_otr_filepath_handler_custom(F3DGfx** cmd0) {
                                                 : ActiveResMgr()->GetResourceRawPointer((const char*)fileName));
 
     if (hasRouteMarker && nDL == nullptr) {
-        // A bad route is skipped instead of reaching the null-DL assert below.
         static std::unordered_set<std::string> sReportedBadRoutes;
         if (sReportedBadRoutes.insert((const char*)cmd->words.w1).second) {
             SPDLOG_ERROR("G_DL_OTR_FILEPATH: routed DL '{}' failed to resolve ({}); skipping",
@@ -3879,8 +3826,6 @@ bool gfx_dl_otr_filepath_handler_custom(F3DGfx** cmd0) {
 
     if (C0(16, 1) == 0 && nDL != nullptr) {
         if (routedRM != nullptr) {
-            // Depth BEFORE the call: while the routed DL runs, depth > this; once the exec stack
-            // unwinds back to/below it, the routed DL (and any DL it branched to) is done.
             g_crossRMStack.push_back({ routedRM, g_exec_stack.cmd_stack.size() });
         }
         g_exec_stack.call(*cmd0, nDL);
@@ -3910,15 +3855,12 @@ bool gfx_modify_vtx_handler_f3dex2(F3DGfx** cmd0) {
     return false;
 }
 
-// A target still in the N64 segmented range means SegAddr found no bound segment, e.g. a
-// cross-game DL using a segment the drawing game never set. Executing it would run garbage.
 static bool IsUnresolvedSegmentTarget(const void* target) {
     const uintptr_t address = (uintptr_t)target;
     if (address == 0 || address > 0x0FFFFFFF) {
         return address == 0;
     }
 #ifdef _WIN32
-    // Windows can place heap and module memory this low: only memory that is not readable is an unresolved segment.
     MEMORY_BASIC_INFORMATION info;
     if (VirtualQuery(target, &info, sizeof(info)) == 0 || info.State != MEM_COMMIT) {
         return true;
@@ -4017,14 +3959,12 @@ bool gfx_pushcd_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
-// w1 is an interned game name ("mm"); routes raw Gfx* submissions until the matching POP.
 bool gfx_combo_rm_push_handler_custom(F3DGfx** cmd0) {
     const char* gameName = (const char*)(*cmd0)->words.w1;
     std::shared_ptr<Ship::ResourceManager> rm = Ship::CrossRMRegistry::Get(gameName);
     if (rm != nullptr) {
         g_crossRMStack.push_back({ rm, kBracketSentinel });
     } else {
-        // Unknown game: push nothing but count the skip so the matching POP stays balanced.
         static std::unordered_set<std::string> sReportedBadBracketGames;
         if (sReportedBadBracketGames.insert(gameName).second) {
             SPDLOG_ERROR("G_COMBO_RM_PUSH: no ResourceManager registered for game '{}'; ignoring bracket", gameName);
@@ -4082,8 +4022,6 @@ bool gfx_end_dl_handler_common(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     gfx->mMarkerOn = false;
     g_exec_stack.ret();
-    // Pop every route whose DL returned (ret() can unwind several slots), stopping at a bracket:
-    // routed entries always sit above brackets, which only POP removes.
     while (!g_crossRMStack.empty() && g_crossRMStack.back().execDepthAtPush != kBracketSentinel &&
            g_exec_stack.cmd_stack.size() <= g_crossRMStack.back().execDepthAtPush) {
         g_crossRMStack.pop_back();
@@ -4365,7 +4303,6 @@ bool gfx_set_timg_otr_hash_handler_custom(F3DGfx** cmd0) {
             gfx->GfxDpSetTextureImage(fmt, size, width, fileName, texFlags, rawTexMetadata, tex);
         }
     } else {
-        // Logged once per path: this runs every frame the model is drawn.
         static std::unordered_set<std::string> sReportedNullTextures;
         if (sReportedNullTextures.insert(fileName).second) {
             SPDLOG_ERROR("G_SETTIMG_OTR_HASH: Texture is null ({})", fileName);
@@ -4531,28 +4468,20 @@ bool gfx_set_grayscale_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
-// SOH [Enhancement] Toon lighting per-draw marker (mirrors grayscale).
 bool gfx_set_toon_handler_custom(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *cmd0;
 
     gfx->mRdp->toon = cmd->words.w1;
-    // A fresh key must be supplied (per object) after each toon-on; clear any stale one.
     gfx->mRsp->toon_key_valid = false;
     return false;
 }
 
-// SOH [Enhancement] Per-object toon key light: world-space direction (3x s8 / 127) + color (3x u8 / 255).
 bool gfx_set_toon_key_handler_custom(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *cmd0;
 
-    // SOH [Enhancement] The toon key light is pushed to the GPU once per batch (see Flush) as a single
-    // world-space direction + color. Several objects that share texture/state are otherwise batched into
-    // one draw, so they would all be lit by whichever object's key was set last — each object picks its
-    // own key (the nearest light, or the sun), so a shared batch would mislight all but the last. Flush
-    // the pending geometry now, with the PREVIOUS object's key still in effect, so every toon object
-    // becomes its own correctly-lit batch.
+    // The key is uploaded once per batch, so flush with the previous object's key still in effect.
     gfx->Flush();
 
     int8_t dx = (cmd->words.w0 >> 16) & 0xFF;
@@ -4565,7 +4494,6 @@ bool gfx_set_toon_key_handler_custom(F3DGfx** cmd0) {
     gfx->mRsp->toon_key_color[1] = ((cmd->words.w1 >> 8) & 0xFF) / 255.0f;
     gfx->mRsp->toon_key_color[2] = ((cmd->words.w1 >> 0) & 0xFF) / 255.0f;
     gfx->mRsp->toon_key_valid = true;
-    // The key changes the effective light, so force a recompute on the next vertex.
     gfx->mRsp->lights_changed = true;
     return false;
 }
@@ -4946,8 +4874,6 @@ bool gfx_extra_geometry_mode_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
-// SOH [Unbound] OTR_G_FOGF: fog factor as two floats (w1 points at { mul, offset }). Same math as G_MW_FOG
-// (fog = ndcZ * mul + offset, 0..255) without the s16 packing, which capped where fog could start.
 bool gfx_fog_factor_float_handler_custom(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *(cmd0);
@@ -5043,8 +4969,8 @@ static constexpr UcodeHandler otrHandlers = {
     { OTR_G_MTX_OTR_FILEPATH,
       { "G_MTX_OTR_FILEPATH", gfx_mtx_otr_filepath_handler_custom } },          // G_MTX_OTR_FILEPATH (0x29)
     { OTR_G_COMBO_RM_PUSH,
-      { "G_COMBO_RM_PUSH", gfx_combo_rm_push_handler_custom } },                // G_COMBO_RM_PUSH (0x2a)
-    { OTR_G_COMBO_RM_POP, { "G_COMBO_RM_POP", gfx_combo_rm_pop_handler_custom } }, // G_COMBO_RM_POP (0x2b)
+      { "G_COMBO_RM_PUSH", gfx_combo_rm_push_handler_custom } },
+    { OTR_G_COMBO_RM_POP, { "G_COMBO_RM_POP", gfx_combo_rm_pop_handler_custom } },
     { OTR_G_DL_OTR_HASH, { "G_DL_OTR_HASH", gfx_dl_otr_hash_handler_custom } }, // G_DL_OTR_HASH (0x31)
     { OTR_G_VTX_OTR_HASH, { "G_VTX_OTR_HASH", gfx_vtx_hash_handler_custom } },  // G_VTX_OTR_HASH (0x32)
     { OTR_G_MARKER, { "G_MARKER", gfx_marker_handler_otr } },                   // G_MARKER (0X33)
@@ -5063,9 +4989,9 @@ static constexpr UcodeHandler otrHandlers = {
     { OTR_G_REGBLENDEDTEX,
       { "G_REGBLENDEDTEX", gfx_register_blended_texture_handler_custom } },         // G_REGBLENDEDTEX (0x3f)
     { OTR_G_SETINTENSITY, { "G_SETINTENSITY", gfx_set_intensity_handler_custom } }, // G_SETINTENSITY (0x40)
-    { OTR_G_FOGF, { "G_FOGF", gfx_fog_factor_float_handler_custom } },              // G_FOGF (0x41)
-    { OTR_G_SETTOON, { "G_SETTOON", gfx_set_toon_handler_custom } },                // G_SETTOON (0x4b)
-    { OTR_G_SETTOONKEY, { "G_SETTOONKEY", gfx_set_toon_key_handler_custom } },      // G_SETTOONKEY (0x4c)
+    { OTR_G_FOGF, { "G_FOGF", gfx_fog_factor_float_handler_custom } },
+    { OTR_G_SETTOON, { "G_SETTOON", gfx_set_toon_handler_custom } },
+    { OTR_G_SETTOONKEY, { "G_SETTOONKEY", gfx_set_toon_key_handler_custom } },
     { OTR_G_MOVEMEM_HASH, { "OTR_G_MOVEMEM_HASH", gfx_movemem_handler_otr } },      // OTR_G_MOVEMEM_HASH
     { OTR_G_PUSH_SHADER, { "G_PUSH_SHADER", gfx_push_shader } },
     { OTR_G_POP_SHADER, { "G_POP_SHADER", gfx_pop_shader } },
@@ -5758,7 +5684,7 @@ void gfx_cc_get_features(uint64_t shader_id0, uint64_t shader_id1, struct CCFeat
     cc_features->opt_invisible = (shader_id1 & SHADER_OPT(INVISIBLE)) != 0;
     cc_features->opt_grayscale = (shader_id1 & SHADER_OPT(GRAYSCALE)) != 0;
     cc_features->opt_prim_depth = (shader_id1 & SHADER_OPT(PRIM_DEPTH)) != 0;
-    cc_features->opt_toon = (shader_id1 & SHADER_OPT(TOON)) != 0; // SOH [Enhancement] toon lighting
+    cc_features->opt_toon = (shader_id1 & SHADER_OPT(TOON)) != 0;
 
     cc_features->clamp[0][0] = shader_id1 & SHADER_OPT(TEXEL0_CLAMP_S);
     cc_features->clamp[0][1] = shader_id1 & SHADER_OPT(TEXEL0_CLAMP_T);

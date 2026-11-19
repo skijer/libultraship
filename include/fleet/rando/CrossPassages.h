@@ -9,8 +9,6 @@
 
 namespace ComboRando::CrossDungeon {
 
-// An optional overworld passage between two regions, joined at one native entrance of each game. Reaching
-// either region opens the other: the passage's holes stand beside those entrances' spawns.
 struct PassageDefinition {
     const char* key;
     const char* label;
@@ -18,7 +16,6 @@ struct PassageDefinition {
     int32_t mm;
 };
 
-// OoT ENTR_* and MM ENTRANCE(scene, spawn) values; each game checks its own column against its tables.
 inline constexpr PassageDefinition kPassages[] = {
     { "ikana", "Graveyard - Road to Ikana", 0x0E4, 0xA000 },
     { "greatBay", "Lake Hylia - Great Bay Coast", 0x102, 0x6800 },
@@ -37,7 +34,6 @@ inline const PassageDefinition* FindPassage(const std::string& key) {
     return found != std::end(kPassages) ? found : nullptr;
 }
 
-// Both directions of every passage the cross seed enables; seeds without the list have none.
 inline std::vector<Passage> DecodePassages(const nlohmann::json& crossSeed) {
     std::vector<Passage> passages;
     if (!crossSeed.is_object() || !crossSeed.contains("passages")) {

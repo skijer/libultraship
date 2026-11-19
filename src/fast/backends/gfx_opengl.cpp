@@ -75,8 +75,6 @@ void GfxRenderingAPIOGL::SetPerDrawUniforms() {
         glUniform1iv(mCurrentShaderProgram->texture_height_location, 2, height);
     }
 
-    // SOH [Enhancement] Toon lighting: per-object dominant light + frame-global ramp shape, both
-    // pushed in by the application (SetToonLighting / SetToonRamp). No config reads in the framework.
     if (mCurrentShaderProgram->opt_toon) {
         glUniform3fv(mCurrentShaderProgram->toon_light_dir_location, 1, mToonLightDir);
         glUniform3fv(mCurrentShaderProgram->toon_light_color_location, 1, mToonLightColor);
@@ -498,7 +496,6 @@ ShaderProgram* GfxRenderingAPIOGL::CreateAndLoadNewShader(uint64_t shader_id0, u
         ++cnt;
     }
 
-    // SOH [Enhancement] Toon lighting world-space normal attribute (order must match the vbo packing).
     if (cc_features.opt_toon) {
         prg->attribLocations[cnt] = glGetAttribLocation(shader_program, "aNormal");
         prg->attribSizes[cnt] = 3;
@@ -531,7 +528,6 @@ ShaderProgram* GfxRenderingAPIOGL::CreateAndLoadNewShader(uint64_t shader_id0, u
     prg->texture_height_location = glGetUniformLocation(shader_program, "texture_height");
     prg->texture_filtering_location = glGetUniformLocation(shader_program, "texture_filtering");
 
-    // SOH [Enhancement] Toon lighting uniforms
     prg->opt_toon = cc_features.opt_toon;
     prg->toon_light_dir_location = glGetUniformLocation(shader_program, "toon_light_dir");
     prg->toon_light_color_location = glGetUniformLocation(shader_program, "toon_light_color");
@@ -741,8 +737,6 @@ void GfxRenderingAPIOGL::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, size
 }
 
 void GfxRenderingAPIOGL::Init() {
-// SOH [WASM] Emscripten does not define __linux__, so it would otherwise land in the GLEW
-// branch. WebGL2 entry points come from the Emscripten GLES3 headers -- there is no GLEW.
 #if !defined(__linux__) && !defined(__OpenBSD__) && !defined(__EMSCRIPTEN__)
     glewInit();
 #endif

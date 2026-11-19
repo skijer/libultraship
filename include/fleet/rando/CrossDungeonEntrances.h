@@ -23,7 +23,7 @@ inline int32_t CanonicalNativeReturn(int32_t resolved, const std::map<int32_t, i
 }
 
 struct Endpoint {
-    int game = 0; // 0 = OoT, 1 = MM; never reinterpret an entrance in the other host.
+    int game = 0;
     int32_t index = 0;
     bool operator==(const Endpoint& other) const {
         return game == other.game && index == other.index;
@@ -41,8 +41,7 @@ inline bool IsInteriorPool(Pool pool) {
 struct PoolOptions {
     bool dungeons = true, bosses = false, interiors = false, grottos = false, expanded = false;
     bool shops = false, doorInteriors = false;
-    bool legacyInteriors = false; // Catalogue policy for exact replay of schema v1-v3 seeds.
-    // A dungeon's way out no longer leads back outside the door that led in.
+    bool legacyInteriors = false;
     bool decoupled = false;
     bool Any() const {
         return dungeons || bosses || interiors || grottos || shops || doorInteriors;
@@ -69,7 +68,7 @@ struct Dungeon {
     std::string id;
     Endpoint entrance;
     Endpoint exit;
-    Endpoint returnTo; // Already resolved through this slot's native exit shuffle.
+    Endpoint returnTo;
     std::vector<Endpoint> escapeExits = {};
     Pool pool = Pool::Dungeon;
     bool expanded = false;
@@ -135,7 +134,6 @@ inline void Validate(const std::vector<Dungeon>& dungeons) {
     }
 }
 
-// Where each dungeon's exit leads, by catalogue index; empty, or an entry left unset, keeps it coupled.
 using ExitDestinations = std::vector<std::optional<Endpoint>>;
 
 inline std::vector<Route> FromPermutation(const std::vector<Dungeon>& dungeons, const std::vector<size_t>& permutation,
@@ -185,7 +183,6 @@ inline std::vector<Route> FromPermutation(const std::vector<Dungeon>& dungeons, 
         Endpoint warp = *source.warpReturn;
         auto recovery = source.warpCheckpoint;
         bool composed = false;
-        // Odolwa's first completion remains inside the owning temple's prison.
         const bool internalWarp = source.boss == 8 && source.warpCheckpoint.has_value();
         for (auto escape : source.escapeExits) {
             if (internalWarp)
@@ -205,7 +202,7 @@ inline std::vector<Route> FromPermutation(const std::vector<Dungeon>& dungeons, 
                 if (dungeons[next].entrance == warp) {
                     warp = dungeons[permutation[next]].entrance;
                     recovery = warp;
-                    break; // The native target receives exactly one cross-pool overlay.
+                    break;
                 }
         for (auto escape : target.escapeExits)
             routes.push_back({ Phase::BeforeNative, escape, warp, source.id, recovery });
@@ -219,7 +216,7 @@ inline std::vector<Route> FromPermutation(const std::vector<Dungeon>& dungeons, 
 
 inline std::vector<Route> Generate(const std::vector<Dungeon>& dungeons, uint64_t seed, bool enabled) {
     if (!enabled)
-        return {}; // No native graph or RNG work on the existing disabled path.
+        return {};
     std::vector<size_t> permutation;
     for (size_t i = 0; i < dungeons.size(); ++i)
         permutation.push_back(i);
@@ -241,7 +238,7 @@ inline std::vector<Route> Generate(const std::vector<Dungeon>& dungeons, uint64_
 inline Endpoint Resolve(const std::vector<Route>& routes, Phase phase, Endpoint source) {
     for (const auto& route : routes) {
         if (route.phase == phase && route.from == source)
-            return route.to; // Exactly one leg. A second lookup would undo a permutation cycle.
+            return route.to;
     }
     return source;
 }

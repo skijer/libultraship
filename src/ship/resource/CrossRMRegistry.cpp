@@ -24,8 +24,7 @@ void CrossRMRegistry::RegisterTeardownListener(void (*listener)()) {
     }
 }
 
-// Runs at deinit on the main thread: the manager's thread pool joins its workers when it dies,
-// and doing that later, at module unload, deadlocks under the loader lock.
+// Must run before module unload: the pool joins its workers on destruction, which deadlocks under the loader lock.
 void CrossRMRegistry::Unregister(const std::string& name) {
     std::vector<void (*)()> listeners;
     {

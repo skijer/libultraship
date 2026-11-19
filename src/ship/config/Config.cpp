@@ -51,7 +51,6 @@ nlohmann::json Config::Nested(const std::string& key) {
         return mFlattenedJson;
     }
 
-    // On a key clash, fall back to the last state that unflattened.
     nlohmann::json gjson;
     if (!TryUnflatten(gjson)) {
         gjson = mNestedJson;
@@ -165,7 +164,6 @@ void Config::SetBlock(const std::string& key, nlohmann::json block) {
                     gjson2 = &gjson2->at(dot);
                     curDot++;
                 } else {
-                    // Create missing intermediate keys instead of silently dropping the write.
                     if (!gjson2->is_object()) {
                         return;
                     }
@@ -239,7 +237,6 @@ void Config::Reload() {
 }
 
 void Config::Save() {
-    // Unflatten before truncating the file: a leaf-vs-subtree key clash must not lose the config.
     if (!TryUnflatten(mNestedJson)) {
         return;
     }
