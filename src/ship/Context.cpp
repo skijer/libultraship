@@ -249,7 +249,8 @@ bool Context::InitResourceManager(const std::vector<std::string>& archivePaths,
 #endif
 
     mMainPath = GetConfig()->GetString("Game.Main Archive", GetAppDirectoryPath());
-    mPatchesPath = GetConfig()->GetString("Game.Patches Archive", GetAppDirectoryPath() + "/mods");    if (archivePaths.empty()) {
+    mPatchesPath = GetConfig()->GetString("Game.Patches Archive", GetAppDirectoryPath() + "/mods");
+    if (archivePaths.empty()) {
         std::vector<std::string> paths = std::vector<std::string>();
         paths.push_back(mMainPath);
         paths.push_back(mPatchesPath);

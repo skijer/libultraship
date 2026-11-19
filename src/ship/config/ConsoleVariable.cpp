@@ -181,10 +181,10 @@ void ConsoleVariable::SetString(const char* name, const char* value) {
         variable = std::make_shared<CVar>();
     }
 
-    variable->Type = ConsoleVariableType::String;
-    if (variable->String != nullptr) {
+    if (variable->Type == ConsoleVariableType::String) {
         free(variable->String);
     }
+    variable->Type = ConsoleVariableType::String;
     variable->String = strdup(value);
 }
 
