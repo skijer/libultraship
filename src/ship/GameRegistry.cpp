@@ -7,8 +7,9 @@
 
 namespace Ship {
 
-static std::shared_mutex sGamesMutex;
-static std::unordered_map<std::string, std::shared_ptr<GameServices>> sGames;
+// Never destroyed: games still registered at exit would log from their destructors after spdlog is gone.
+static std::shared_mutex& sGamesMutex = *new std::shared_mutex();
+static auto& sGames = *new std::unordered_map<std::string, std::shared_ptr<GameServices>>();
 static std::atomic<GameServices*> sActiveGame = nullptr;
 static thread_local GameServices* tScopedGame = nullptr;
 
