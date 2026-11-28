@@ -26,7 +26,7 @@ struct File;
  * structurally an MPQ archive. This class is only compiled when the project is built
  * with MPQ support enabled (`-DINCLUDE_MPQ_SUPPORT`).
  *
- * All file I/O operations are thread-safe via the StormLib handle.
+ * StormLib handles are not safe to share between threads, so file I/O is serialized by mFileMutex.
  */
 class OtrArchive final : virtual public Archive {
   public:
@@ -73,6 +73,7 @@ class OtrArchive final : virtual public Archive {
 
   private:
     HANDLE mHandle;
+    std::mutex mFileMutex;
 };
 } // namespace Ship
 
